@@ -1,3 +1,8 @@
+if { [info exists ::env(LIBRARY_PATH)] } {
+    set ::env(LIBRARY_PATH) /usr/lib/x86_64-linux-gnu:$env(LIBRARY_PATH)
+} else {
+    set ::env(LIBRARY_PATH) /usr/lib/x86_64-linux-gnu
+}
 
 open_project ${PROJECT_NAME}_prj
 
