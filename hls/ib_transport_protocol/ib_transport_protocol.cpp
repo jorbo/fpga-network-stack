@@ -1272,7 +1272,7 @@ void generate_exh(	stream<event>&			metaIn,
 					packetInfoFifo.write(info);
 
 					sendWord.keep((AETH_SIZE/8)-1, 0) = 0xFF;
-					sendWord.keep(WIDTH-1, (AETH_SIZE/8)) = 0;
+					sendWord.keep((WIDTH/8)-1, (AETH_SIZE/8)) = 0;
 					sendWord.last = 1;
 
 					std::cout << "RDMA_READ_RESP ";
@@ -1321,7 +1321,7 @@ void generate_exh(	stream<event>&			metaIn,
 					packetInfoFifo.write(info);
 
 					sendWord.keep(AETH_SIZE/8-1, 0) = 0xFF;
-					sendWord.keep(WIDTH-1, (AETH_SIZE/8)) = 0;
+					sendWord.keep((WIDTH/8)-1, (AETH_SIZE/8)) = 0;
 					sendWord.last = 1;
 
 					std::cout << "RC_ACK ";
@@ -1858,8 +1858,8 @@ void tx_ipUdpMetaMerger(	stream<connTableEntry>& tx_connTable2ibh_rsp,
 	{
 		tx_connTable2ibh_rsp.read(connMeta);
 		tx_lengthFifo.read(len);
-		std::cout << "PORT: " << connMeta.remote_udp_port << std::endl;
-		m_axis_tx_meta.write(ipUdpMeta(connMeta.remote_ip_address, RDMA_DEFAULT_PORT, connMeta.remote_udp_port, len));
+		std::cout << "Remote PORT: " << connMeta.remote_udp_port << std::endl;
+		m_axis_tx_meta.write(ipUdpMeta(connMeta.remote_ip_address, connMeta.remote_udp_port, RDMA_DEFAULT_PORT, len));
 		tx_dstQpFifo.write(connMeta.remote_qpn);
 	}
 }
