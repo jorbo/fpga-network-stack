@@ -158,6 +158,7 @@ void extract_icrc(	stream<net_axis<WIDTH> >&		input,
 			break;
 		} //switch
 		output.write(ei_prevWord);
+		std::cout << "CRC: " << std::hex << crc << std::endl;
 #ifndef DISABLE_CRC_CHECK
 		rx_crcFifo.write(crc);
 #endif
@@ -648,7 +649,7 @@ void rocev2(hls::stream<net_axis<WIDTH> >&	s_axis_rx_data,
 			tx_udp2ipMetaFifo,
 			tx_udp2ipFifo,
 			tx_ip2crcFifo,
-			local_ip_address,
+			local_ip_address(127,96),
 			UDP_PROTOCOL);
 #endif
 
@@ -713,6 +714,12 @@ void rocev2(hls::stream<net_axis<WIDTH> >&	s_axis_rx_data,
 #ifdef DISABLE_CRC_CHECK
 	regCrcDropPkgCount = 0;
 	extract_icrc(s_axis_rx_data, rx_crc2ipFifo);
+//	net_axis<WIDTH> rx_crc2ip;
+//	rx_crc2ipFifo.read(rx_crc2ip);
+//        std::cout << "[rocev2] crc2ip: ";
+//        print(std::cout, rx_crc2ip);
+//        std::cout << std::endl;
+
 #else
 	extract_icrc(s_axis_rx_data, rx_dataFifo, rx_crcFifo);
 	mask_header_fields<1>(rx_dataFifo, rx_crcDataFifo, rx_maskedDataFifo);
