@@ -43,6 +43,7 @@ synth/
 *.upgrade_log
 #checkpoints
 *.dcp
+iprepo/
 
 #test input/output files
 *.dat
