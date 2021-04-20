@@ -280,7 +280,7 @@ pkt 3 - RDMA_READ_RESP_ONLY: AETH + payld
                         ack<--MSN->
 ```
 
-## Mesc
+## Misc
 
 - To change **MTU**, modify `PMTU` in `rocev2_config.hpp.in`.
 - The "[PASSED]" message of stdout doesn't mean anything.
