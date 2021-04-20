@@ -57,8 +57,8 @@ struct ifConnReq
     ap_uint<16> remote_udp_port;
 };
 
-hls::stream<qpContext>&	s_axis_qp_interface,
-hls::stream<ifConnReq>&	s_axis_qp_conn_interface,
+hls::stream<qpContext>& s_axis_qp_interface,
+hls::stream<ifConnReq>& s_axis_qp_conn_interface,
 ```
 
 2. Then write **`txMeta`** to issue the RDMA operation(around line 540). The `txMeta` interface definition in HLS:
@@ -78,7 +78,7 @@ hls::stream<txMeta>& s_axis_tx_meta,
 hls::stream<net_axis<WIDTH> >& s_axis_tx_data,
 ```
 
-3. Run `csim` to perform c-simulation. You can get the output packet in file `rdma_txwerteread.out`.
+3. Ensure that the `test_tx_debug()` function is called in the main function (around bottom). Then run `csim` to perform c-simulation. You can get the output packet in file `rdma_txwerteread.out`.
 
 ---
 
@@ -128,7 +128,7 @@ output packet:
 To test rx path, use tx test to generate the test packet and feed it into the stack.
 
 1. Follow TX test to generate the ingress packets. Then copy the packets from `rdma_txwerteread.out` to file `write_read_read_large_receiver.in`.
-2. Run `csim` to prform c-simulation. You can find the output packets in the file `write_read_read_large_receiver.out`.
+2. Ensure that the `test_rx()` function is called in the main function (around bottom). Then run `csim` to prform c-simulation. You can find the output packets in the file `write_read_read_large_receiver.out`.
 
 ---
 
@@ -282,4 +282,5 @@ pkt 3 - RDMA_READ_RESP_ONLY: AETH + payld
 
 ## Mesc
 
-- To change **MTU**, modify `PMTU` in `rocev2_config.hpp.in`
+- To change **MTU**, modify `PMTU` in `rocev2_config.hpp.in`.
+- The "[PASSED]" message of stdout doesn't mean anything.
