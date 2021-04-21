@@ -55,8 +55,8 @@ module roce_stack #(
     //axi_stream.master       m_axis_roce_role_rx_data,
     axi_stream.slave        s_axis_tx_data,
     
-    axis_meta.master    m_axis_rx_pcmeta,
-    axis_meta.slave     s_axis_tx_pcmeta,
+    // axis_meta.master    m_axis_rx_pcmeta,
+    // axis_meta.slave     s_axis_tx_pcmeta,
 
 
    //Config
@@ -248,9 +248,9 @@ assign m_axis_mem_write_data.last = axis_mem_write_data.last;
 end
 //endgenerate
 
-assign m_axis_rx_pcmeta.valid = 1'b0;
-assign m_axis_rx_pcmeta.data = 0;
-assign s_axis_tx_pcmeta.ready = 1'b1;
+// assign m_axis_rx_pcmeta.valid = 1'b0;
+// assign m_axis_rx_pcmeta.data = 0;
+// assign s_axis_tx_pcmeta.ready = 1'b1;
 
 end
 else begin

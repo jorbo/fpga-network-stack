@@ -96,6 +96,10 @@ logic                                ap_start_pulse                ;
 logic [1:0]          ap_done_i                     ;
 logic [1:0]          ap_done_r                      = 2'b0;
 
+//  TODO: control by kernel
+axi_stream #(.WIDTH(WIDTH))       s_axis_roce_role_tx_data();
+assign s_axis_roce_role_tx_data.valid = 1'b0;
+
 // IP Handler Input
 axi_stream #(.WIDTH(WIDTH))     axis_slice_to_ibh();
 // IP handler
@@ -396,7 +400,7 @@ roce_stack #(
     .s_axis_rx_data(axis_roce_slice_to_roce),
     //TX
     .s_axis_tx_meta(axis_tx_metadata),
-    .s_axis_tx_data(),//s_axis_roce_role_tx_data), //TODO: role tx data
+    .s_axis_tx_data(s_axis_roce_role_tx_data), //TODO: role tx data
 
 `ifndef ENABLE_DROP 
     .m_axis_tx_data(axis_roce_to_roce_slice),

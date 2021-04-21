@@ -144,6 +144,10 @@ axis_mem_cmd    axis_roce_read_cmd();
 axis_mem_cmd    axis_roce_write_cmd();
 axi_stream      s_axis_roce_read_data();
 axi_stream      m_axis_roce_write_data();
+axis_mem_status axis_roce_read_status();
+axis_mem_status axis_roce_write_status();
+assign axis_roce_read_status.ready = 1'b1;
+assign axis_roce_write_status.ready = 1'b1;
 
 // Register and invert reset signal.
 always @(posedge ap_clk) begin
@@ -260,14 +264,14 @@ mem_single_inf #(
 //memory read commands
 .s_axis_mem_read_cmd(axis_roce_read_cmd),
 //memory read status
-.m_axis_mem_read_status(),
+.m_axis_mem_read_status(axis_roce_read_status),
 //memory read stream
 .m_axis_mem_read_data(s_axis_roce_read_data),
 
 //memory write commands
 .s_axis_mem_write_cmd(axis_roce_write_cmd),
 //memory rite status
-.m_axis_mem_write_status(),
+.m_axis_mem_write_status(axis_roce_write_status),
 //memory write stream
 .s_axis_mem_write_data(m_axis_roce_write_data),
 
