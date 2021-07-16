@@ -21,6 +21,7 @@ if {$command == "synthesis"} {
 } elseif {$command == "csim"} {
    csim_design
 } elseif {$command == "ip"} {
+   config_rtl -module_prefix "dhcp_"
    export_design -format ip_catalog -ipname "dhcp_client" -display_name "DHCP Client" -description "DHCP Client to be used with the Xilinx Labs TCP & UDP offload engines." -vendor "xilinx.labs" -version "1.05"
 } elseif {$command == "installip"} {
    file mkdir ${IPREPO_DIR}

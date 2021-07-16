@@ -23,6 +23,7 @@ if {$command == "synthesis"} {
 } elseif {$command == "csim"} {
    csim_design
 } elseif {$command == "ip"} {
+   config_rtl -module_prefix "udp_"
    export_design -format ip_catalog -ipname "udp" -display_name "UDP" -description "" -vendor "ethz.systems.fpga" -version "0.4"
 } elseif {$command == "installip"} {
    file mkdir ${IPREPO_DIR}

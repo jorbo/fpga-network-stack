@@ -23,6 +23,7 @@ if {$command == "synthesis"} {
 } elseif {$command == "csim"} {
    csim_design -argv {${CMAKE_CURRENT_SOURCE_DIR}/in.dat ${CMAKE_CURRENT_SOURCE_DIR}/tcp.out}
 } elseif {$command == "ip"} {
+   config_rtl -module_prefix "mie_"
    export_design -format ip_catalog -ipname "mac_ip_encode" -display_name "MAC IP Encoder" -vendor "ethz.systems.fpga" -version "2.0"
 } elseif {$command == "installip"} {
    file mkdir ${IPREPO_DIR}

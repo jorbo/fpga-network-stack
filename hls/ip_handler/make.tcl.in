@@ -25,6 +25,7 @@ if {$command == "synthesis"} {
 } elseif {$command == "csim"} {
    csim_design -clean
 } elseif {$command == "ip"} {
+   config_rtl -module_prefix "iph_"
    export_design -format ip_catalog -ipname "ip_handler" -display_name "IP Handler" -vendor "ethz.systems.fpga" -version "2.0"
 } elseif {$command == "installip"} {
    file mkdir ${IPREPO_DIR}

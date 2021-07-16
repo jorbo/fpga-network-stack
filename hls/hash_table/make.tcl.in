@@ -21,6 +21,7 @@ if {$command == "synthesis"} {
 } elseif {$command == "csim"} {
    csim_design
 } elseif {$command == "ip"} {
+   config_rtl -module_prefix "hash_"
    export_design -format ip_catalog -ipname "hash_table" -display_name "Hash Table (cuckoo)" -description "" -vendor "ethz.systems.fpga" -version "1.0"
 } elseif {$command == "installip"} {
    file mkdir ${IPREPO_DIR}
