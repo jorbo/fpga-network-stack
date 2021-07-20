@@ -562,14 +562,14 @@ void toe(	// Data & Memory Interface
 	static stream<rxTxSarReply>			txSar2rxEng_upd_rsp("txSar2rxEng_upd_rsp");
 	static stream<txSarAckPush>			txSar2txApp_ack_push("txSar2txApp_ack_push");
 	static stream<txAppTxSarPush>		txApp2txSar_push("txApp2txSar_push");
-	#pragma HLS stream variable=txEng2txSar_upd_req		depth=2
-	#pragma HLS stream variable=txSar2txEng_upd_rsp		depth=2
+	#pragma HLS stream variable=txEng2txSar_upd_req		depth=16
+	#pragma HLS stream variable=txSar2txEng_upd_rsp		depth=16
 	//#pragma HLS stream variable=txApp2txSar_upd_req		depth=2
 	//#pragma HLS stream variable=txSar2txApp_upd_rsp		depth=2
-	#pragma HLS stream variable=rxEng2txSar_upd_req		depth=2
-	#pragma HLS stream variable=txSar2rxEng_upd_rsp		depth=2
-	#pragma HLS stream variable=txSar2txApp_ack_push	depth=2
-	#pragma HLS stream variable=txApp2txSar_push		depth=2
+	#pragma HLS stream variable=rxEng2txSar_upd_req		depth=16
+	#pragma HLS stream variable=txSar2rxEng_upd_rsp		depth=16
+	#pragma HLS stream variable=txSar2txApp_ack_push	depth=16
+	#pragma HLS stream variable=txApp2txSar_push		depth=16
 	#pragma HLS DATA_PACK variable=txEng2txSar_upd_req
 	#pragma HLS DATA_PACK variable=txSar2txEng_upd_rsp
 	//#pragma HLS DATA_PACK variable=txApp2txSar_upd_req
@@ -606,10 +606,10 @@ void toe(	// Data & Memory Interface
 	static stream<extendedEvent>			eventEng2ackDelay_event("eventEng2ackDelay_event");
 	static stream<extendedEvent>			eventEng2txEng_event("eventEng2txEng_event");
 	#pragma HLS stream variable=rxEng2eventEng_setEvent				depth=512
-	#pragma HLS stream variable=txApp2eventEng_setEvent			depth=4
-	#pragma HLS stream variable=timer2eventEng_setEvent			depth=4 //TODO maybe reduce to 2, there should be no evil cycle
-	#pragma HLS stream variable=eventEng2ackDelay_event				depth=4
-	#pragma HLS stream variable=eventEng2txEng_event				depth=16
+	#pragma HLS stream variable=txApp2eventEng_setEvent			depth=64
+	#pragma HLS stream variable=timer2eventEng_setEvent			depth=64 //TODO maybe reduce to 2, there should be no evil cycle
+	#pragma HLS stream variable=eventEng2ackDelay_event				depth=64
+	#pragma HLS stream variable=eventEng2txEng_event				depth=64
 	#pragma HLS DATA_PACK variable=rxEng2eventEng_setEvent
 	#pragma HLS DATA_PACK variable=txApp2eventEng_setEvent
 	#pragma HLS DATA_PACK variable=timer2eventEng_setEvent
@@ -714,11 +714,11 @@ void toe(	// Data & Memory Interface
 					timer2txApp_notification);
 
 	static stream<ap_uint<1> > ackDelayFifoReadCount("ackDelayFifoReadCount");
-	#pragma HLS stream variable=ackDelayFifoReadCount		depth=2
+	#pragma HLS stream variable=ackDelayFifoReadCount		depth=64
 	static stream<ap_uint<1> > ackDelayFifoWriteCount("ackDelayFifoWriteCount");
-	#pragma HLS stream variable=ackDelayFifoWriteCount		depth=2
+	#pragma HLS stream variable=ackDelayFifoWriteCount		depth=64
 	static stream<ap_uint<1> > txEngFifoReadCount("txEngFifoReadCount");
-	#pragma HLS stream variable=txEngFifoReadCount		depth=2
+	#pragma HLS stream variable=txEngFifoReadCount		depth=64
 	event_engine(txApp2eventEng_setEvent, rxEng2eventEng_setEvent, timer2eventEng_setEvent, eventEng2ackDelay_event,
 					ackDelayFifoReadCount, ackDelayFifoWriteCount, txEngFifoReadCount);
 	ack_delay(eventEng2ackDelay_event, eventEng2txEng_event, ackDelayFifoReadCount, ackDelayFifoWriteCount);

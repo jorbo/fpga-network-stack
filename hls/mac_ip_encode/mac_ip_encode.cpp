@@ -403,14 +403,14 @@ void mac_ip_encode( hls::stream<net_axis<WIDTH> >&			dataIn,
 
 	extract_ip_address(dataIn, dataStreamBuffer0, arpTableOut, regSubNetMask, regDefaultGateway);
 
-	compute_ipv4_checksum(dataStreamBuffer0, dataStreamBuffer1, subSumFifo, true);
-	finalize_ipv4_checksum<WIDTH/16>(subSumFifo, checksumFifo);
+	mac_compute_ipv4_checksum(dataStreamBuffer0, dataStreamBuffer1, subSumFifo, true);
+	mac_finalize_ipv4_checksum<WIDTH/16>(subSumFifo, checksumFifo);
 
 	insert_ip_checksum(dataStreamBuffer1, checksumFifo, dataStreamBuffer2);
 
 
 	handle_arp_reply(arpTableIn, dataStreamBuffer2, headerFifo, dataStreamBuffer3, myMacAddress);
-	lshiftWordByOctet<WIDTH, 1>(((ETH_HEADER_SIZE%WIDTH)/8), dataStreamBuffer3, dataStreamBuffer4);
+	mac_lshiftWordByOctet<WIDTH, 1>(((ETH_HEADER_SIZE%WIDTH)/8), dataStreamBuffer3, dataStreamBuffer4);
 	insert_ethernet_header(headerFifo, dataStreamBuffer4, dataOut);
 
 	//generate_ethernet(dataStreamBuffer3, arpTableIn, dataOut, myMacAddress);

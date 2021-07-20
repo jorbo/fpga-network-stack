@@ -524,14 +524,14 @@ void ip_handler(hls::stream<net_axis<WIDTH> >&		s_axis_raw,
 
 	route_by_eth_protocol(etherTypeFifo, ethDataFifo, m_axis_ARP, ipv4ShiftFifo, ipv6ShiftFifo);
 
-	rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 1>(((ETH_HEADER_SIZE%WIDTH)/8), ipv4ShiftFifo, ipDataFifo);	
-	rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 2>(((ETH_HEADER_SIZE%WIDTH)/8), ipv6ShiftFifo, ipv6DataFifo);	
+	ip_handler_rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 1>(((ETH_HEADER_SIZE%WIDTH)/8), ipv4ShiftFifo, ipDataFifo);	
+	ip_handler_rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 3>(((ETH_HEADER_SIZE%WIDTH)/8), ipv6ShiftFifo, ipv6DataFifo);	
 
 	extract_ip_meta(ipDataFifo, ipDataMetaFifo, ipv4ProtocolFifo, validIpAddressFifo, myIpAddress);
 
-	compute_ipv4_checksum(ipDataMetaFifo, ipDataCheckFifo, iph_subSumsFifoOut);
+	ip_handler_compute_ipv4_checksum(ipDataMetaFifo, ipDataCheckFifo, iph_subSumsFifoOut);
 
-	check_ipv4_checksum<WIDTH/16>(iph_subSumsFifoOut, validChecksumFifo);
+	ip_handler_check_ipv4_checksum<WIDTH/16>(iph_subSumsFifoOut, validChecksumFifo);
 
 	ip_invalid_dropper(ipDataCheckFifo, validChecksumFifo, validIpAddressFifo, ipDataDropFifo, ipv4ValidFifo);
 
@@ -543,7 +543,7 @@ void ip_handler(hls::stream<net_axis<WIDTH> >&		s_axis_raw,
 
 	// Altough RoCEv2 is using IPv4 & UDP, we cannot parse the IPv4 header here and remove it, due ot the ICRC of RoCE.
 	// The best solution is to duplicate the packet and let the UDP/IP and RoCE stack do filtering according to the port number
-	duplicate_stream(udpDataFifo, m_axis_UDP, m_axis_ROCE);
+	ip_handler_duplicate_stream(udpDataFifo, m_axis_UDP, m_axis_ROCE);
 
 }
 

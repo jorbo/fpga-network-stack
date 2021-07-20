@@ -222,7 +222,7 @@ void udp(		hls::stream<ipMeta>&		s_axis_rx_meta,
 	#pragma HLS DATA_PACK variable=rx_udpMetaFifo
 
 	process_udp<WIDTH>(s_axis_rx_data, rx_udpMetaFifo, rx_udp2shiftFifo, reg_listen_port);
-	rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 2>(((UDP_HEADER_SIZE%WIDTH)/8), rx_udp2shiftFifo, m_axis_rx_data);
+	udp_rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 2>(((UDP_HEADER_SIZE%WIDTH)/8), rx_udp2shiftFifo, m_axis_rx_data);
 
 	merge_rx_meta(s_axis_rx_meta, rx_udpMetaFifo, m_axis_rx_meta);
 
@@ -238,7 +238,7 @@ void udp(		hls::stream<ipMeta>&		s_axis_rx_meta,
 
 	split_tx_meta(s_axis_tx_meta, m_axis_tx_meta, tx_udpMetaFifo);
 
-	lshiftWordByOctet<WIDTH, 1>(((UDP_HEADER_SIZE%WIDTH)/8), s_axis_tx_data, tx_shift2udpFifo);
+	udp_lshiftWordByOctet<WIDTH, 1>(((UDP_HEADER_SIZE%WIDTH)/8), s_axis_tx_data, tx_shift2udpFifo);
 
 	generate_udp<WIDTH>(tx_udpMetaFifo, tx_shift2udpFifo, m_axis_tx_data);
 }

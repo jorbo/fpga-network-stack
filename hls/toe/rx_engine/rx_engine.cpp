@@ -34,7 +34,7 @@
 
 //parse IP header, and remove it
 template <int WIDTH>
-void process_ipv4(	stream<net_axis<WIDTH> >&		dataIn,
+void toe_process_ipv4(	stream<net_axis<WIDTH> >&		dataIn,
 					stream<ap_uint<4> >&	process2dropLengthFifo,
 					stream<pseudoMeta>&		metaOut,
 					stream<net_axis<WIDTH> >&		dataOut)
@@ -1762,7 +1762,7 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 #pragma HLS pipeline II=1
 #pragma HLS INLINE off
 
-	enum fsmStateType {IDLE, CUT_FIRST, ALIGN_SECOND, FWD_ALIGNED, RESIDUE};
+	enum fsmStateType {IDLE, IDLE_REG, CUT_FIRST, ALIGN_SECOND, FWD_ALIGNED, RESIDUE};
 	static fsmStateType rxMemWrState = IDLE;
 	static mmCmd cmd;
 	static ap_uint<WINDOW_BITS> remainingLength = 0;
@@ -1777,24 +1777,26 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 		if (!cmdIn.empty())
 		{
 			cmdIn.read(cmd);
+			rxMemWrState = IDLE_REG;
+		}
+		break;
+	case IDLE_REG:
+		if ((cmd.saddr(WINDOW_BITS-1, 0) + cmd.bbt) > BUFFER_SIZE)
+		{
+			lengthFirstPkg = BUFFER_SIZE - cmd.saddr;
+			remainingLength = lengthFirstPkg;
+			offset = lengthFirstPkg(DATA_KEEP_BITS - 1, 0);
 
-			if ((cmd.saddr(WINDOW_BITS-1, 0) + cmd.bbt) > BUFFER_SIZE)
-			{
-				lengthFirstPkg = BUFFER_SIZE - cmd.saddr;
-				remainingLength = lengthFirstPkg;
-				offset = lengthFirstPkg(DATA_KEEP_BITS - 1, 0);
+			doubleAccess.write(true);
+			cmdOut.write(mmCmd(cmd.saddr, lengthFirstPkg));
+			rxMemWrState = CUT_FIRST;
+		}
+		else
+		{
+			doubleAccess.write(false);
 
-				doubleAccess.write(true);
-				cmdOut.write(mmCmd(cmd.saddr, lengthFirstPkg));
-				rxMemWrState = CUT_FIRST;
-			}
-			else
-			{
-				doubleAccess.write(false);
-
-				cmdOut.write(cmd);
-				rxMemWrState = FWD_ALIGNED;
-			}
+			cmdOut.write(cmd);
+			rxMemWrState = FWD_ALIGNED;
 		}
 		break;
 	case CUT_FIRST:
@@ -2026,7 +2028,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	#pragma HLS STREAM depth=2 variable=rx_process2dropLengthFifo
 
 
-	process_ipv4<WIDTH>(ipRxData, rx_process2dropLengthFifo, rxEng_ipMetaFifo, rxEng_dataBuffer0);
+	toe_process_ipv4<WIDTH>(ipRxData, rx_process2dropLengthFifo, rxEng_ipMetaFifo, rxEng_dataBuffer0);
 	//Assumes for WIDTH > 64 no optional fields
 	drop_optional_ip_header<WIDTH>(rx_process2dropLengthFifo, rxEng_dataBuffer0, rxEng_dataBuffer4);
 	//align
@@ -2062,7 +2064,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 #endif
 
 	two_complement_subchecksums<WIDTH, 11>(rxEng_dataBuffer1, rxEng_dataBuffer2, subSumFifo);
-	check_ipv4_checksum(subSumFifo, rxEng_checksumValidFifo);
+	toe_check_ipv4_checksum(subSumFifo, rxEng_checksumValidFifo);
 	processPseudoHeader<WIDTH>(rxEng_dataBuffer2,
 								rxEng_dataBuffer3a,
 								rxEng_checksumValidFifo,
