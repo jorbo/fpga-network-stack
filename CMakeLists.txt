@@ -39,6 +39,12 @@ if (NOT hasParent)
       set(FPGA_FAMILY ultraplus) #TODO: is it ultraplus?
       set(NETWORK_BANDWIDTH 100 CACHE STRING "Network bandwidth")
    endif()
+   if (DEVICE_NAME STREQUAL "u250")
+      set(FPGA_PART xcu250-figd2104-2L-e)
+      set(FPGA_FAMILY ultraplus)
+      set(NETWORK_BANDWIDTH 100 CACHE STRING "Network bandwidth")
+   endif()
+ 
 endif()
 
 # set bandwidth
