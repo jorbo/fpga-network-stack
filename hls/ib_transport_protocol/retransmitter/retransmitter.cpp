@@ -28,7 +28,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ************************************************/
 #include "retransmitter.hpp"
 #include <rocev2_config.hpp> //defines MAX_QPS
-
+#include "../ib_types.hpp"
 using namespace hls;
 
 

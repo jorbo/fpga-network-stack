@@ -78,8 +78,60 @@ struct dmaState
 };
 
 
-void msn_table(hls::stream<rxMsnReq>& rxExh2msnTable_upd_req,
-					hls::stream<ap_uint<16> >& txExh2msnTable_req,
-					hls::stream<ifMsnReq>& if2msnTable_init,
-					hls::stream<dmaState>& msnTable2rxExh_rsp,
-					hls::stream<txMsnRsp>& msnTable2txExh_rsp);
+template <int SIZE>
+void msn_table(hls::stream<rxMsnReq> rxExh2msnTable_upd_req[SIZE],
+			   hls::stream<ap_uint<16> > txExh2msnTable_req[SIZE],
+			   hls::stream<ifMsnReq> if2msnTable_init[SIZE],
+			   hls::stream<dmaState> msnTable2rxExh_rsp[SIZE],
+			   hls::stream<txMsnRsp> msnTable2txExh_rsp[SIZE])
+{
+#pragma HLS ARRAY_PARTITION variable=rxExh2msnTable_upd_req dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=txExh2msnTable_req dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=if2msnTable_init dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=msnTable2rxExh_rsp dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=msnTable2txExh_rsp dim=1 complete    
+
+#pragma HLS PIPELINE II = 1
+#pragma HLS INLINE off
+
+	static dmaState msn_table[MAX_QPS];
+#pragma HLS RESOURCE variable = msn_table core = RAM_2P_BRAM
+	for (int i = 0; i < SIZE; i++)
+	{
+		#pragma HLS unroll
+		rxMsnReq rxRequest;
+		ifMsnReq ifRequest;
+		ap_uint<16> qpn;
+
+		// TODO init channel
+
+		if (!rxExh2msnTable_upd_req[i].empty())
+		{
+			rxExh2msnTable_upd_req[i].read(rxRequest);
+			if (rxRequest.write)
+			{
+				msn_table[rxRequest.qpn].msn = rxRequest.msn;
+				msn_table[rxRequest.qpn].vaddr = rxRequest.vaddr;
+				msn_table[rxRequest.qpn].dma_length = rxRequest.dma_length;
+			}
+			else
+			{
+				msnTable2rxExh_rsp[i].write(dmaState(msn_table[rxRequest.qpn]));
+			}
+		}
+		else if (!txExh2msnTable_req[i].empty())
+		{
+			txExh2msnTable_req[i].read(qpn);
+			msnTable2txExh_rsp[i].write(txMsnRsp(msn_table[qpn].msn, msn_table[qpn].r_key));
+		}
+		else if (!if2msnTable_init[i].empty()) // move up??
+		{
+			std::cout << "MSN init for QPN: " << qpn << std::endl;
+			if2msnTable_init[i].read(ifRequest);
+			msn_table[ifRequest.qpn].msn = 0;
+			msn_table[ifRequest.qpn].vaddr = 0;		 // TODO requried?
+			msn_table[ifRequest.qpn].dma_length = 0; // TODO requried?
+			msn_table[ifRequest.qpn].r_key = ifRequest.r_key;
+		}
+	}
+}

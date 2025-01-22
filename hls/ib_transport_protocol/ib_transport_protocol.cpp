@@ -36,15 +36,16 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "retransmitter/retransmitter.hpp"
 #include "read_req_table.hpp"
 #include "multi_queue/multi_queue.hpp"
-
+#include "conn_table_entry.hpp"
+#include "state_table_structs.hpp"
 template <int WIDTH>
-void rx_process_ibh(	stream<net_axis<WIDTH> >& input,
-						stream<ibhMeta>& metaOut,
-						stream<ibOpCode>&	metaOut2,
-						stream<net_axis<WIDTH> >& output)
+void rx_process_ibh(stream<net_axis<WIDTH> > &input,
+					stream<ibhMeta> &metaOut,
+					stream<ibOpCode> &metaOut2,
+					stream<net_axis<WIDTH> > &output)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
 	static BaseTransportHeader<WIDTH> bth;
 	static bool metaWritten = false;
@@ -61,7 +62,7 @@ void rx_process_ibh(	stream<net_axis<WIDTH> >& input,
 			output.write(currWord);
 			if (!metaWritten)
 			{
-            metaOut.write(ibhMeta(bth.getOpCode(), bth.getPartitionKey(), bth.getDstQP(), bth.getPsn(), true));
+				metaOut.write(ibhMeta(bth.getOpCode(), bth.getPartitionKey(), bth.getDstQP(), bth.getPsn(), true));
 				std::cout << "PROCESS IBH opcode: " << bth.getOpCode() << std::endl;
 				metaOut2.write(bth.getOpCode());
 				metaWritten = true;
@@ -73,24 +74,33 @@ void rx_process_ibh(	stream<net_axis<WIDTH> >& input,
 			metaWritten = false;
 		}
 	}
-
 }
 
 template <int WIDTH>
-void rx_process_exh(	stream<net_axis<WIDTH> >& input,
-						stream<ibOpCode>&	metaIn,
-						stream<exhMeta>&	exhMetaFifo,
-						stream<ExHeader<WIDTH> >& metaOut,
-						stream<net_axis<WIDTH> >& output)
+void rx_process_exh(stream<net_axis<WIDTH> > &input,
+					stream<ibOpCode> &metaIn,
+					stream<exhMeta> &exhMetaFifo,
+					stream<ExHeader<WIDTH> > &metaOut,
+					stream<net_axis<WIDTH> > &output)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum fsmStateType {META, ACK_HEADER, RETH_HEADER, NO_HEADER, RPCH_HEADER};
+	enum fsmStateType
+	{
+		META,
+		ACK_HEADER,
+		RETH_HEADER,
+		NO_HEADER,
+		RPCH_HEADER,
+		ATOMIC_HEADER
+	};
 	static fsmStateType state = META;
 	static RdmaExHeader<WIDTH> rdmaHeader;
 	static AckExHeader<WIDTH> ackHeader;
-	//static RdmaPointerChaseHeader<WIDTH> pointerChasingHeader;
+	static AtomicExHeader<WIDTH> atomicHeader;
+	static AtomicAckExHeader<WIDTH> atomicAckHeader;
+	// static RdmaPointerChaseHeader<WIDTH> pointerChasingHeader;
 	static bool metaWritten = false;
 
 	net_axis<WIDTH> currWord;
@@ -111,6 +121,9 @@ void rx_process_exh(	stream<net_axis<WIDTH> >& input,
 			{
 				state = RETH_HEADER;
 			}
+			// else if(checkIfAtomicHeader(opCode)){
+			// 	state = ATOMIC_HEADER;
+			// }
 #if POINTER_CHASING_EN
 			else if (opCode == RC_RDMA_READ_POINTER_REQUEST)
 			{
@@ -166,7 +179,7 @@ void rx_process_exh(	stream<net_axis<WIDTH> >& input,
 				{
 					if (opCode == RC_RDMA_READ_REQUEST || opCode == RC_RDMA_READ_CONSISTENT_REQUEST)
 					{
-						exhMetaFifo.write(exhMeta(false, (rdmaHeader.getLength()+(PMTU-1))/PMTU));
+						exhMetaFifo.write(exhMeta(false, (rdmaHeader.getLength() + (PMTU - 1)) / PMTU));
 					}
 					else
 					{
@@ -187,6 +200,44 @@ void rx_process_exh(	stream<net_axis<WIDTH> >& input,
 			}
 		}
 		break;
+	// case ATOMIC_HEADER:
+	// if (!input.empty())
+	// 	{
+	// 		input.read(currWord);
+	// 		atomicHeader.parseWord(currWord.data);
+
+	// 		if (metaWritten && WIDTH <= RETH_SIZE)
+	// 		{
+	// 			output.write(currWord);
+	// 		}
+
+	// 		if (atomicHeader.isReady())
+	// 		{
+	// 			if (!metaWritten)
+	// 			{
+	// 				if (opCode == RC_RDMA_ATOMIC_REQUEST)
+	// 				{
+	// 					exhMetaFifo.write(exhMeta(false, (atomicHeader.getLength() + (PMTU - 1)) / PMTU));
+	// 				}
+	// 				else
+	// 				{
+	// 					exhMetaFifo.write(exhMeta(false));
+	// 				}
+	// 				metaOut.write(ExHeader<WIDTH>(atomicHeader));
+	// 				metaWritten = true;
+	// 			}
+	// 			if (checkIfWriteOrPartReq(opCode) && WIDTH > ATOMICTH_SIZE)
+	// 			{
+	// 				output.write(currWord);
+	// 			}
+	// 		}
+	// 		if (currWord.last)
+	// 		{
+	// 			rdmaHeader.clear();
+	// 			state = META;
+	// 		}
+	// 	}
+	// 	break;
 #if POINTER_CHASING_EN
 	case RPCH_HEADER:
 		if (!input.empty())
@@ -198,9 +249,9 @@ void rx_process_exh(	stream<net_axis<WIDTH> >& input,
 			{
 				if (!metaWritten)
 				{
-					//if (opCode == RC_RDMA_READ_REQUEST)
+					// if (opCode == RC_RDMA_READ_REQUEST)
 					{
-						exhMetaFifo.write(exhMeta(false, (pointerChasingHeader.getLength()+(PMTU-1))/PMTU));
+						exhMetaFifo.write(exhMeta(false, (pointerChasingHeader.getLength() + (PMTU - 1)) / PMTU));
 					}
 					/*else
 					{
@@ -209,10 +260,10 @@ void rx_process_exh(	stream<net_axis<WIDTH> >& input,
 					metaOut.write(ExHeader<WIDTH>(pointerChasingHeader));
 					metaWritten = true;
 				}
-				//This works together with disabling the RightShift, Assumes WIDTH == 64
+				// This works together with disabling the RightShift, Assumes WIDTH == 64
 				else
 				{
-					//output.write(currWord);
+					// output.write(currWord);
 				}
 			}
 			if (currWord.last)
@@ -243,10 +294,8 @@ void rx_process_exh(	stream<net_axis<WIDTH> >& input,
 			}
 		}
 		break;
-	}//switch
-
+	} // switch
 }
-
 
 /**
  * PSN handling page
@@ -259,28 +308,32 @@ void rx_process_exh(	stream<net_axis<WIDTH> >& input,
  * Requester: - retransmit data
  * page 349   - do not increment epsn
  */
-//TODO check if RC_ACK is a NAK
-//TODO validate response is consistent with request
-//TODO actually any response in Unack region is valid, not just the next one.
-void rx_ibh_fsm(	stream<ibhMeta>& metaIn,
-					stream<exhMeta>&	exhMetaFifo,
-					stream<rxStateRsp>& stateTable_rsp,
-					stream<rxStateReq>& stateTable_upd_req,
-					stream<ibhMeta>& metaOut,
-					stream<ackEvent>& ibhEventFifo,
-					stream<bool>& ibhDropFifo,
-					stream<fwdPolicy>& ibhDropMetaFifo,
+// TODO check if RC_ACK is a NAK
+// TODO validate response is consistent with request
+// TODO actually any response in Unack region is valid, not just the next one.
+void rx_ibh_fsm(stream<ibhMeta> &metaIn,
+				stream<exhMeta> &exhMetaFifo,
+				stream<rxStateRsp> &stateTable_rsp,
+				stream<rxStateReq> &stateTable_upd_req,
+				stream<ibhMeta> &metaOut,
+				stream<ackEvent> &ibhEventFifo,
+				stream<bool> &ibhDropFifo,
+				stream<fwdPolicy> &ibhDropMetaFifo,
 #if RETRANS_EN
 
-				stream<rxTimerUpdate>&	rxClearTimer_req,
-				stream<retransRelease>&	rx2retrans_release_upd,
+				stream<rxTimerUpdate> &rxClearTimer_req,
+				stream<retransRelease> &rx2retrans_release_upd,
 #endif
-				ap_uint<32>&		regInvalidPsnDropCount)
+				ap_uint<32> &regInvalidPsnDropCount)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum fsmStateType{LOAD, PROCESS};
+	enum fsmStateType
+	{
+		LOAD,
+		PROCESS
+	};
 	static fsmStateType fsmState = LOAD;
 
 	static ibhMeta meta;
@@ -289,8 +342,7 @@ void rx_ibh_fsm(	stream<ibhMeta>& metaIn,
 	static ap_uint<32> droppedPackets = 0;
 	rxStateRsp qpState;
 
-
-	switch(fsmState)
+	switch (fsmState)
 	{
 	case LOAD:
 		if (!metaIn.empty() && !exhMetaFifo.empty())
@@ -303,55 +355,54 @@ void rx_ibh_fsm(	stream<ibhMeta>& metaIn,
 		}
 		break;
 	case PROCESS:
-		//TODO TIME-WAIT
-		//TODO consider opCode??
+		// TODO TIME-WAIT
+		// TODO consider opCode??
 		if (!stateTable_rsp.empty())
 		{
 			stateTable_rsp.read(qpState);
-			//ap_uint<24> oldest_outstanding_psn = qpState.epsn- 8388608;
-			//TODO compute or store oldest outstanding??
-			//TODO also increment oldest outstanding
-			//Check if in order
-			//TODO Update oldest_oustanding_psn
-			//TODO this is not working with coalescing ACKs
+			// ap_uint<24> oldest_outstanding_psn = qpState.epsn- 8388608;
+			// TODO compute or store oldest outstanding??
+			// TODO also increment oldest outstanding
+			// Check if in order
+			// TODO Update oldest_oustanding_psn
+			// TODO this is not working with coalescing ACKs
 			std::cout << "epsn: " << qpState.epsn << ", packet psn: " << meta.psn << std::endl;
 			// For requests we require total order, for responses, there is potential ACK coalescing, see page 299
 			// For requests, max_forward == epsn
-			//TODO how to deal with other responses if they are not in order??
-			if (qpState.epsn == meta.psn || (meta.op_code == RC_ACK && ((qpState.epsn <= meta.psn && meta.psn <= qpState.max_forward)
-					|| ((qpState.epsn <= meta.psn || meta.psn <= qpState.max_forward) && qpState.max_forward < qpState.epsn))))
-			//if ((qpState.epsn <= meta.psn && meta.psn <= qpState.max_forward)
+			// TODO how to deal with other responses if they are not in order??
+			if (qpState.epsn == meta.psn || (meta.op_code == RC_ACK && ((qpState.epsn <= meta.psn && meta.psn <= qpState.max_forward) || ((qpState.epsn <= meta.psn || meta.psn <= qpState.max_forward) && qpState.max_forward < qpState.epsn))))
+			// if ((qpState.epsn <= meta.psn && meta.psn <= qpState.max_forward)
 			//		|| ((qpState.epsn <= meta.psn || meta.psn <= qpState.max_forward) && qpState.max_forward < qpState.epsn))
 			{
 				std::cout << "NOT DROPPING PSN:" << meta.psn << std::endl;
-				//regNotDropping = 1;
-				if (meta.op_code != RC_ACK && meta.op_code != RC_RDMA_READ_REQUEST && meta.op_code != RC_RDMA_READ_POINTER_REQUEST && meta.op_code != RC_RDMA_READ_CONSISTENT_REQUEST) //TODO do length check instead
+				// regNotDropping = 1;
+				if (meta.op_code != RC_ACK && meta.op_code != RC_RDMA_READ_REQUEST && meta.op_code != RC_RDMA_READ_POINTER_REQUEST && meta.op_code != RC_RDMA_READ_CONSISTENT_REQUEST) // TODO do length check instead
 				{
 					ibhDropFifo.write(false);
 				}
 				ibhDropMetaFifo.write(fwdPolicy(false, false));
-				//TODO more meta for ACKs
-				metaOut.write(meta); //TODO also send for non successful packets
+				// TODO more meta for ACKs
+				metaOut.write(meta); // TODO also send for non successful packets
 				// Update psn
-				//TODO for last param we need vaddr here!
+				// TODO for last param we need vaddr here!
 				if (!emeta.isNak)
 				{
-					stateTable_upd_req.write(rxStateReq(meta.dest_qp, meta.psn+emeta.numPkg, isResponse));
+					stateTable_upd_req.write(rxStateReq(meta.dest_qp, meta.psn + emeta.numPkg, isResponse));
 				}
 #if RETRANS_EN
 
-				//CASE Requester: Update oldest-unacked-reqeust
+				// CASE Requester: Update oldest-unacked-reqeust
 				if (isResponse && !emeta.isNak)
 				{
-					std::cout <<"retrans release, psn: " << meta.psn << std::endl;
+					std::cout << "retrans release, psn: " << meta.psn << std::endl;
 					rx2retrans_release_upd.write(retransRelease(meta.dest_qp, meta.psn));
 				}
-				//CASE Requester: Check if no oustanding requests -> stop timer
+				// CASE Requester: Check if no oustanding requests -> stop timer
 				if (isResponse && meta.op_code != RC_RDMA_READ_RESP_MIDDLE)
 				{
 					rxClearTimer_req.write(rxTimerUpdate(meta.dest_qp, meta.psn == qpState.max_forward));
 #ifndef __SYNTHESIS__
-					if (meta.psn  == qpState.max_forward)
+					if (meta.psn == qpState.max_forward)
 					{
 						std::cout << "clearing transport timer at psn: " << meta.psn << std::endl;
 					}
@@ -361,38 +412,37 @@ void rx_ibh_fsm(	stream<ibhMeta>& metaIn,
 			}
 			// Check for duplicates
 			// For response: epsn = old_unack, old_oustanding = old_valid
-			else if ((qpState.oldest_outstanding_psn < qpState.epsn && meta.psn < qpState.epsn && meta.psn >= qpState.oldest_outstanding_psn)
-					 || (qpState.oldest_outstanding_psn > qpState.epsn && (meta.psn < qpState.epsn || meta.psn >= qpState.oldest_outstanding_psn)))
+			else if ((qpState.oldest_outstanding_psn < qpState.epsn && meta.psn < qpState.epsn && meta.psn >= qpState.oldest_outstanding_psn) || (qpState.oldest_outstanding_psn > qpState.epsn && (meta.psn < qpState.epsn || meta.psn >= qpState.oldest_outstanding_psn)))
 			{
-				//Read request re-execute
+				// Read request re-execute
 				if (meta.op_code == RC_RDMA_READ_REQUEST || meta.op_code == RC_RDMA_READ_POINTER_REQUEST || meta.op_code == RC_RDMA_READ_CONSISTENT_REQUEST)
 				{
 					std::cout << "DUPLICATE READ_REQ PSN:" << meta.psn << std::endl;
 					ibhDropFifo.write(false);
 					ibhDropMetaFifo.write(fwdPolicy(false, false));
 					metaOut.write(meta);
-					//No release required
-					//stateTable_upd_req.write(rxStateReq(meta.dest_qp, meta.psn, meta.partition_key, 0)); //TODO always +1??
+					// No release required
+					// stateTable_upd_req.write(rxStateReq(meta.dest_qp, meta.psn, meta.partition_key, 0)); //TODO always +1??
 				}
-				//Write requests acknowledge, see page 313
+				// Write requests acknowledge, see page 313
 				else if (checkIfWriteOrPartReq(meta.op_code))
 				{
-					//Send out ACK
-					ibhEventFifo.write(ackEvent(meta.dest_qp)); //TODO do we need PSN???
+					// Send out ACK
+					ibhEventFifo.write(ackEvent(meta.dest_qp)); // TODO do we need PSN???
 					std::cout << "DROPPING DUPLICATE PSN:" << meta.psn << std::endl;
 					droppedPackets++;
 					regInvalidPsnDropCount = droppedPackets;
 					ibhDropFifo.write(true);
-					//Meta is required for ACK, TODO no longer
+					// Meta is required for ACK, TODO no longer
 					ibhDropMetaFifo.write(fwdPolicy(false, true));
 				}
-				//TODO what about duplicate responses
-				//drop them
+				// TODO what about duplicate responses
+				// drop them
 				else
 				{
-					//Case Requester: Valid ACKs -> reset timer TODO
-					//for now we just drop everything
-					if (meta.op_code != RC_ACK) //TODO do length check instead
+					// Case Requester: Valid ACKs -> reset timer TODO
+					// for now we just drop everything
+					if (meta.op_code != RC_ACK) // TODO do length check instead
 					{
 						ibhDropFifo.write(true);
 					}
@@ -401,16 +451,16 @@ void rx_ibh_fsm(	stream<ibhMeta>& metaIn,
 			}
 			else // completely invalid
 			{
-				//behavior, see page 313
+				// behavior, see page 313
 				std::cout << "DROPPING INVALID PSN:" << meta.psn << std::endl;
 				droppedPackets++;
 				regInvalidPsnDropCount = droppedPackets;
 				ibhDropMetaFifo.write(fwdPolicy(true, false));
-				//Issue NAK TODO NAK has to be in sequence
+				// Issue NAK TODO NAK has to be in sequence
 				if (meta.op_code != RC_ACK)
 				{
 					ibhDropFifo.write(true);
-					//Do not generate further ACK/NAKs until we received a valid pkg
+					// Do not generate further ACK/NAKs until we received a valid pkg
 					if (qpState.retryCounter == 0x7)
 					{
 						if (isResponse)
@@ -419,14 +469,13 @@ void rx_ibh_fsm(	stream<ibhMeta>& metaIn,
 						}
 						else
 						{
-							//Setting NAK to epsn, since otherwise epsn-1 is used
+							// Setting NAK to epsn, since otherwise epsn-1 is used
 							ibhEventFifo.write(ackEvent(meta.dest_qp, qpState.epsn, true));
 						}
 						qpState.retryCounter--;
 					}
-					//We do not increment PSN
+					// We do not increment PSN
 					stateTable_upd_req.write(rxStateReq(meta.dest_qp, qpState.epsn, qpState.retryCounter, isResponse));
-
 				}
 			}
 
@@ -436,16 +485,21 @@ void rx_ibh_fsm(	stream<ibhMeta>& metaIn,
 	}
 }
 
-//Currently not used!!
+// Currently not used!!
 template <int WIDTH>
-void drop_ooo_ibh(	stream<net_axis<WIDTH> >& input,
-					stream<bool>& metaIn,
-					stream<net_axis<WIDTH> >& output)
+void drop_ooo_ibh(stream<net_axis<WIDTH> > &input,
+					stream<bool> &metaIn,
+					stream<net_axis<WIDTH> > &output)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum fsmType {META, FWD, DROP};
+	enum fsmType
+	{
+		META,
+		FWD,
+		DROP
+	};
 	static fsmType state = META;
 
 	bool drop;
@@ -453,42 +507,42 @@ void drop_ooo_ibh(	stream<net_axis<WIDTH> >& input,
 
 	switch (state)
 	{
-		case META:
-			if (!metaIn.empty())
+	case META:
+		if (!metaIn.empty())
+		{
+			metaIn.read(drop);
+			if (drop)
 			{
-				metaIn.read(drop);
-				if (drop)
-				{
-					state = DROP;
-				}
-				else
-				{
-					state = FWD;
-				}
+				state = DROP;
 			}
-			break;
-		case FWD:
-			if (!input.empty())
+			else
 			{
-				input.read(currWord);
-				output.write(currWord);
-				if (currWord.last)
-				{
-					state = META;
-				}
+				state = FWD;
 			}
-			break;
-		case DROP:
-			if (!input.empty())
+		}
+		break;
+	case FWD:
+		if (!input.empty())
+		{
+			input.read(currWord);
+			output.write(currWord);
+			if (currWord.last)
 			{
-				input.read(currWord);
-				if (currWord.last)
-				{
-					state = META;
-				}
+				state = META;
 			}
-			break;
-	} //switch
+		}
+		break;
+	case DROP:
+		if (!input.empty())
+		{
+			input.read(currWord);
+			if (currWord.last)
+			{
+				state = META;
+			}
+		}
+		break;
+	} // switch
 }
 
 // Followed by ICRC TODO remove ICRC
@@ -505,35 +559,40 @@ void drop_ooo_ibh(	stream<net_axis<WIDTH> >& input,
  * ACK: AETH
  */
 template <int WIDTH>
-void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
-					stream<ap_uint<16> >& 			udpLengthFifo,
-					stream<dmaState>&				msnTable2rxExh_rsp,
+void rx_exh_fsm(stream<ibhMeta> &metaIn,
+				stream<ap_uint<16> > &udpLengthFifo,
+				stream<dmaState> &msnTable2rxExh_rsp,
 #if RETRANS_EN
-					stream<rxReadReqRsp>&			readReqTable_rsp,
+				stream<rxReadReqRsp> &readReqTable_rsp,
 #endif
-					stream<ap_uint<64> >&			rx_readReqAddr_pop_rsp,
-					stream<ExHeader<WIDTH> >&	headerInput,
-					stream<routedMemCmd>&			memoryWriteCmd,
-					stream<readRequest>&			readRequestFifo,
+				stream<ap_uint<64> > &rx_readReqAddr_pop_rsp,
+				stream<ExHeader<WIDTH> > &headerInput,
+				stream<routedMemCmd> &memoryWriteCmd,
+				stream<readRequest> &readRequestFifo,
 #if POINTER_CHASING_EN
-					stream<ptrChaseMeta>&			m_axis_rx_pcmeta,
+				stream<ptrChaseMeta> &m_axis_rx_pcmeta,
 #endif
-					stream<rxMsnReq>&				rxExh2msnTable_upd_req,
-//#if RETRANS_EN
-					stream<rxReadReqUpdate>&		readReqTable_upd_req,
-//#endif
-					stream<mqPopReq>&				rx_readReqAddr_pop_req,
-					stream<ackEvent>&				rx_exhEventMetaFifo,
+				stream<rxMsnReq> &rxExh2msnTable_upd_req,
+				// #if RETRANS_EN
+				stream<rxReadReqUpdate> &readReqTable_upd_req,
+				// #endif
+				stream<mqPopReq> &rx_readReqAddr_pop_req,
+				stream<ackEvent> &rx_exhEventMetaFifo,
 #if RETRANS_EN
-					stream<retransmission>&			rx2retrans_req,
+				stream<retransmission> &rx2retrans_req,
 #endif
-					stream<pkgSplitType>&	rx_pkgSplitTypeFifo,
-					stream<pkgShiftType>&	rx_pkgShiftTypeFifo)
+				stream<pkgSplitType> &rx_pkgSplitTypeFifo,
+				stream<pkgShiftType> &rx_pkgShiftTypeFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum pe_fsmStateType {META, DMA_META, DATA};
+	enum pe_fsmStateType
+	{
+		META,
+		DMA_META,
+		DATA
+	};
 	static pe_fsmStateType pe_fsmState = META;
 	static ibhMeta meta;
 	net_axis<WIDTH> currWord;
@@ -544,7 +603,6 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 	static bool consumeReadAddr;
 	static rxReadReqRsp readReqMeta;
 	static ap_uint<64> readReqAddr;
-
 
 	switch (pe_fsmState)
 	{
@@ -567,6 +625,7 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 				consumeReadAddr = true;
 				rx_readReqAddr_pop_req.write(mqPopReq(meta.dest_qp));
 			}
+
 			pe_fsmState = DMA_META;
 		}
 		break;
@@ -579,8 +638,9 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 		{
 			msnTable2rxExh_rsp.read(dmaMeta);
 			udpLengthFifo.read(udpLength);
+			// rx_pkgSplitTypeFifo
 #if RETRANS_EN
-			if (meta.op_code == RC_ACK)
+				if (meta.op_code == RC_ACK)
 			{
 				readReqTable_rsp.read(readReqMeta);
 			}
@@ -592,11 +652,11 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 			pe_fsmState = DATA;
 		}
 		break;
-	case DATA: //TODO merge with DMA_META
-		switch(meta.op_code)
+	case DATA: // TODO merge with DMA_META
+		switch (meta.op_code)
 		{
 		case RC_RDMA_WRITE_ONLY:
-		//case RC_RDMA_WRITE_ONLY_WIT_IMD:
+		// case RC_RDMA_WRITE_ONLY_WIT_IMD:
 		case RC_RDMA_WRITE_FIRST:
 		case RC_RDMA_PART_ONLY:
 		case RC_RDMA_PART_FIRST:
@@ -607,13 +667,13 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 
 			if (rdmaHeader.getLength() != 0)
 			{
-				//Compute payload length
-				payLoadLength = udpLength - (8 + 12 + 16 + 4); //UDP, BTH, RETH, CRC
-				//compute remaining length
+				// Compute payload length
+				payLoadLength = udpLength - (8 + 12 + 16 + 4); // UDP, BTH, RETH, CRC
+				// compute remaining length
 				ap_uint<32> headerLen = rdmaHeader.getLength();
-				ap_uint<32> remainingLength =  headerLen - payLoadLength;
+				ap_uint<32> remainingLength = headerLen - payLoadLength;
 
-				//Send write request
+				// Send write request
 				if ((meta.op_code == RC_RDMA_WRITE_ONLY) || (meta.op_code == RC_RDMA_WRITE_FIRST))
 				{
 					memoryWriteCmd.write(routedMemCmd(rdmaHeader.getVirtualAddress(), payLoadLength, route));
@@ -623,11 +683,11 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 					memoryWriteCmd.write(routedMemCmd(rdmaHeader.getVirtualAddress(), headerLen, route));
 				}
 				// Update state
-				//TODO msn, only for ONLY??
-				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1, rdmaHeader.getVirtualAddress()+payLoadLength, remainingLength));
+				// TODO msn, only for ONLY??
+				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn + 1, rdmaHeader.getVirtualAddress() + payLoadLength, remainingLength));
 				// Trigger ACK
-				rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp)); //TODO does this require PSN??
-				//std::cout << std::hex << "LEGNTH" << header.getLength() << std::endl;
+				rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp)); // TODO does this require PSN??
+				// std::cout << std::hex << "LEGNTH" << header.getLength() << std::endl;
 				rx_pkgSplitTypeFifo.write(pkgSplitType(meta.op_code, route));
 				rx_pkgShiftTypeFifo.write(SHIFT_RETH);
 				pe_fsmState = META;
@@ -644,12 +704,12 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 			print(std::cout, currWord);
 			std::cout << std::endl;*/
 
-			//Fwd data words
+			// Fwd data words
 			axiRoute route = ((meta.op_code == RC_RDMA_WRITE_MIDDLE) || (meta.op_code == RC_RDMA_WRITE_LAST)) ? ROUTE_DMA : ROUTE_CUSTOM;
-			payLoadLength = udpLength - (8 + 12 + 4); //UDP, BTH, CRC
-			//compute remaining length
+			payLoadLength = udpLength - (8 + 12 + 4); // UDP, BTH, CRC
+			// compute remaining length
 			ap_uint<32> remainingLength = dmaMeta.dma_length - payLoadLength;
-			//Send write request
+			// Send write request
 			if ((meta.op_code == RC_RDMA_WRITE_MIDDLE) || (meta.op_code == RC_RDMA_WRITE_LAST))
 			{
 				memoryWriteCmd.write(routedMemCmd(dmaMeta.vaddr, payLoadLength, route));
@@ -658,16 +718,16 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 			{
 				memoryWriteCmd.write(routedMemCmd(dmaMeta.vaddr, payLoadLength, route));
 			}*/
-			//TODO msn only on LAST??
-			rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1, dmaMeta.vaddr+payLoadLength, remainingLength));
+			// TODO msn only on LAST??
+			rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn + 1, dmaMeta.vaddr + payLoadLength, remainingLength));
 			// Trigger ACK
-			rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp)); //TODO does this require PSN??
+			rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp)); // TODO does this require PSN??
 			rx_pkgSplitTypeFifo.write(pkgSplitType(meta.op_code, route));
 			rx_pkgShiftTypeFifo.write(SHIFT_NONE);
 			pe_fsmState = META;
 
 #ifndef __SYNTHESIS__
-			if ((meta.op_code == RC_RDMA_WRITE_LAST)  || (meta.op_code == RC_RDMA_PART_LAST))
+			if ((meta.op_code == RC_RDMA_WRITE_LAST) || (meta.op_code == RC_RDMA_PART_LAST))
 			{
 				assert(remainingLength == 0);
 			}
@@ -686,7 +746,7 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 			{
 				axiRoute route = (meta.op_code == RC_RDMA_READ_CONSISTENT_REQUEST) ? ROUTE_CUSTOM : ROUTE_DMA;
 				readRequestFifo.write(readRequest(meta.dest_qp, rdmaHeader.getVirtualAddress(), rdmaHeader.getLength(), meta.psn, route));
-				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1));
+				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn + 1));
 			}
 			pe_fsmState = META;
 			break;
@@ -700,7 +760,7 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 			{
 				readRequestFifo.write(readRequest(meta.dest_qp, pcHeader.getVirtualAddress(), pcHeader.getLength(), meta.psn, ROUTE_CUSTOM));
 				m_axis_rx_pcmeta.write(ptrChaseMeta(pcHeader.getPredicateKey(), pcHeader.getPredicateMask(), pcHeader.getPredicateOp(), pcHeader.getPtrOffset(), pcHeader.getIsRelPtr(), pcHeader.getNextPtrOffset(), pcHeader.getNextPtrValid()));
-				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1));
+				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn + 1));
 			}
 			pe_fsmState = META;
 			break;
@@ -711,11 +771,11 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 		case RC_RDMA_READ_RESP_LAST:
 		{
 			// [BTH][AETH][PayLd]
-			//AETH for first and last
+			// AETH for first and last
 			AckExHeader<WIDTH> ackHeader = exHeader.getAckHeader();
 			if (ackHeader.isNAK())
 			{
-				//Trigger retransmit
+				// Trigger retransmit
 #if RETRANS_EN
 				rx2retrans_req.write(retransmission(meta.dest_qp, meta.psn));
 #endif
@@ -724,14 +784,14 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 			{
 				readReqTable_upd_req.write((rxReadReqUpdate(meta.dest_qp, meta.psn)));
 			}
-			//Write out meta
-			payLoadLength = udpLength - (8 + 12 + 4 + 4); //UDP, BTH, AETH, CRC
+			// Write out meta
+			payLoadLength = udpLength - (8 + 12 + 4 + 4); // UDP, BTH, AETH, CRC
 			rx_pkgShiftTypeFifo.write(SHIFT_AETH);
 			if (meta.op_code != RC_RDMA_READ_RESP_LAST)
 			{
 				memoryWriteCmd.write(routedMemCmd(readReqAddr, payLoadLength));
-				//TODO maybe not the best way to store the vaddr in the msnTable
-				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn, readReqAddr+payLoadLength, 0));
+				// TODO maybe not the best way to store the vaddr in the msnTable
+				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn, readReqAddr + payLoadLength, 0));
 			}
 			else
 			{
@@ -743,11 +803,11 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 		}
 		case RC_RDMA_READ_RESP_MIDDLE:
 			// [BTH][PayLd]
-			payLoadLength = udpLength - (8 + 12 + 4); //UDP, BTH, CRC
+			payLoadLength = udpLength - (8 + 12 + 4); // UDP, BTH, CRC
 			rx_pkgShiftTypeFifo.write(SHIFT_NONE);
 			memoryWriteCmd.write(routedMemCmd(dmaMeta.vaddr, payLoadLength));
-			//TODO how does msn have to be handled??
-			rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1, dmaMeta.vaddr+payLoadLength, 0));
+			// TODO how does msn have to be handled??
+			rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn + 1, dmaMeta.vaddr + payLoadLength, 0));
 			rx_pkgSplitTypeFifo.write(pkgSplitType(meta.op_code));
 			pe_fsmState = META;
 			break;
@@ -759,36 +819,46 @@ void rx_exh_fsm(	stream<ibhMeta>&				metaIn,
 #if RETRANS_EN
 			if (ackHeader.isNAK())
 			{
-				//Trigger retransmit
+				// Trigger retransmit
 				rx2retrans_req.write(retransmission(meta.dest_qp, meta.psn));
 			}
 			else if (readReqMeta.oldest_outstanding_readreq < meta.psn && readReqMeta.valid)
 			{
-				//Trigger retransmit
+				// Trigger retransmit
 				rx2retrans_req.write(retransmission(meta.dest_qp, readReqMeta.oldest_outstanding_readreq));
 			}
 #endif
 			pe_fsmState = META;
 			break;
 		}
+		case RC_RDMA_ATOMIC_REQUEST:
+		{
+
+			pe_fsmState = META;
+			break;
+		}
 		default:
 			break;
-		} //switch meta_Opcode
+		} // switch meta_Opcode
 		break;
-	} //switch
+	} // switch
 }
 
 template <int WIDTH>
-void rx_exh_payload(stream<pkgSplitType>&	metaIn,
-					stream<net_axis<WIDTH> >&		input,
-					stream<routed_net_axis<WIDTH> >&	rx_exh2rethShiftFifo,
-					stream<net_axis<WIDTH> >&		rx_exh2aethShiftFifo,
-					stream<routed_net_axis<WIDTH> >&	rx_exhNoShiftFifo)
+void rx_exh_payload(stream<pkgSplitType> &metaIn,
+					stream<net_axis<WIDTH> > &input,
+					stream<routed_net_axis<WIDTH> > &rx_exh2rethShiftFifo,
+					stream<net_axis<WIDTH> > &rx_exh2aethShiftFifo,
+					stream<routed_net_axis<WIDTH> > &rx_exhNoShiftFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum fsmStateType {META, PKG};
+	enum fsmStateType
+	{
+		META,
+		PKG
+	};
 	static fsmStateType rep_state = META;
 	static pkgSplitType meta;
 
@@ -816,7 +886,7 @@ void rx_exh_payload(stream<pkgSplitType>&	metaIn,
 				rx_exh2rethShiftFifo.write(routed_net_axis<WIDTH>(currWord, meta.route));
 			}
 			else if ((meta.op_code == RC_RDMA_READ_RESP_ONLY) || (meta.op_code == RC_RDMA_READ_RESP_FIRST) ||
-					(meta.op_code == RC_RDMA_READ_RESP_LAST))
+					 (meta.op_code == RC_RDMA_READ_RESP_LAST))
 			{
 				rx_exh2aethShiftFifo.write(currWord);
 			}
@@ -831,19 +901,23 @@ void rx_exh_payload(stream<pkgSplitType>&	metaIn,
 			}
 		}
 		break;
-	} //switch
+	} // switch
 }
 
-void handle_read_requests(	stream<readRequest>&	requestIn,
-							stream<memCmdInternal>&	memoryReadCmd,
-							stream<event>&			readEventFifo)
+void handle_read_requests(stream<readRequest> &requestIn,
+						  stream<memCmdInternal> &memoryReadCmd,
+						  stream<event> &readEventFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum hrr_fsmStateType {META, GENERATE};
+	enum hrr_fsmStateType
+	{
+		META,
+		GENERATE
+	};
 	static hrr_fsmStateType hrr_fsmState = META;
-	static readRequest request; //Need QP, dma_length, vaddr
+	static readRequest request; // Need QP, dma_length, vaddr
 	static txMeta writeMeta;
 	ibOpCode readOpcode;
 	ap_uint<48> readAddr;
@@ -873,7 +947,7 @@ void handle_read_requests(	stream<readRequest>&	requestIn,
 #else
 			memoryReadCmd.write(memCmdInternal(request.qpn, readAddr, dmaLength, request.route));
 #endif
-			//event needs to contain QP, opCode, length, psn
+			// event needs to contain QP, opCode, length, psn
 			readEventFifo.write(event(readOpcode, request.qpn, readLength, request.psn));
 		}
 		break;
@@ -892,7 +966,7 @@ void handle_read_requests(	stream<readRequest>&	requestIn,
 			readOpcode = RC_RDMA_READ_RESP_LAST;
 			hrr_fsmState = META;
 		}
-		//memoryReadCmd.write(memCmdInternal(request.qpn, readAddr, readLength, (readOpcode == RC_RDMA_READ_RESP_LAST)));
+		// memoryReadCmd.write(memCmdInternal(request.qpn, readAddr, readLength, (readOpcode == RC_RDMA_READ_RESP_LAST)));
 		request.psn++;
 		readEventFifo.write(event(readOpcode, request.qpn, readLength, request.psn));
 		break;
@@ -902,51 +976,55 @@ void handle_read_requests(	stream<readRequest>&	requestIn,
  * For everything, except READ_RSP, we get PSN from state_table
  */
 template <int WIDTH>
-void generate_ibh(	stream<ibhMeta>&			metaIn,
-					stream<ap_uint<24> >&		dstQpIn,
-					stream<stateTableEntry>&	stateTable2txIbh_rsp,
-					//stream<net_axis<WIDTH> >&			input,
-					stream<txStateReq>&			txIbh2stateTable_upd_req,
+void generate_ibh(stream<ibhMeta> &metaIn,
+				  stream<ap_uint<24> > &dstQpIn,
+				  stream<stateTableEntry> &stateTable2txIbh_rsp,
+				  // stream<net_axis<WIDTH> >&			input,
+				  stream<txStateReq> &txIbh2stateTable_upd_req,
 #if RETRANS_EN
-					stream<retransMeta>&		tx2retrans_insertMeta,
+				  stream<retransMeta> &tx2retrans_insertMeta,
 #endif
-					stream<BaseTransportHeader<WIDTH> >& tx_ibhHeaderFifo)
+				  stream<BaseTransportHeader<WIDTH> > &tx_ibhHeaderFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum fsmStateType {META, GET_PSN};
+	enum fsmStateType
+	{
+		META,
+		GET_PSN
+	};
 	static fsmStateType gi_state = META;
 	static BaseTransportHeader<WIDTH> header;
 
 	static ibhMeta meta;
 	net_axis<WIDTH> currWord;
-	stateTableEntry qpState; //TODO what is really required
+	stateTableEntry qpState; // TODO what is really required
 	ap_uint<24> dstQp;
 
-	switch(gi_state)
+	switch (gi_state)
 	{
 	case META:
 		if (!metaIn.empty() && !dstQpIn.empty())
 		{
 			metaIn.read(meta);
 			dstQpIn.read(dstQp);
-			meta.partition_key = 0xFFFF; //TODO this is hard-coded, where does it come from??
+			meta.partition_key = 0xFFFF; // TODO this is hard-coded, where does it come from??
 			header.clear();
 
 			header.setOpCode(meta.op_code);
 			header.setPartitionKey(meta.partition_key);
-			//PSN only valid for READ_RSP, otherwise we get it in state GET_PSN
+			// PSN only valid for READ_RSP, otherwise we get it in state GET_PSN
 			header.setPsn(meta.psn);
-			header.setDstQP(dstQp); //TODO ist meta.dest_qp required??
+			header.setDstQP(dstQp); // TODO ist meta.dest_qp required??
 			if (meta.validPSN)
 			{
 				tx_ibhHeaderFifo.write(header);
-				//gi_state = HEADER;
+				// gi_state = HEADER;
 			}
 			else
 			{
-				txIbh2stateTable_upd_req.write(txStateReq(meta.dest_qp)); //TODO this is actually our qp
+				txIbh2stateTable_upd_req.write(txStateReq(meta.dest_qp)); // TODO this is actually our qp
 				gi_state = GET_PSN;
 			}
 		}
@@ -957,17 +1035,17 @@ void generate_ibh(	stream<ibhMeta>&			metaIn,
 			stateTable2txIbh_rsp.read(qpState);
 			if (meta.op_code == RC_ACK)
 			{
-				header.setPsn(qpState.resp_epsn-1); //TODO -1 necessary??
+				header.setPsn(qpState.resp_epsn - 1); // TODO -1 necessary??
 			}
 			else
 			{
 				header.setPsn(qpState.req_next_psn);
 				header.setAckReq(true);
-				//Update PSN
+				// Update PSN
 				ap_uint<24> nextPsn = qpState.req_next_psn + meta.numPkg;
 				txIbh2stateTable_upd_req.write(txStateReq(meta.dest_qp, nextPsn));
 
-				//Store Packet descirptor in retransmitter table
+				// Store Packet descirptor in retransmitter table
 #if RETRANS_EN
 				tx2retrans_insertMeta.write(retransMeta(meta.dest_qp, qpState.req_next_psn, meta.op_code));
 #endif
@@ -978,7 +1056,6 @@ void generate_ibh(	stream<ibhMeta>&			metaIn,
 		break;
 	}
 }
-
 
 /*
  * Types currently supported: DETH, RETH, AETH, ImmDt, IETH
@@ -996,30 +1073,35 @@ void generate_ibh(	stream<ibhMeta>&			metaIn,
  * ACK: AETH
  */
 template <int WIDTH>
-void generate_exh(	stream<event>&			metaIn,
+void generate_exh(stream<event> &metaIn,
 #if POINTER_CHASING_EN
-					stream<ptrChaseMeta>&	s_axis_tx_pcmeta,
+				  stream<ptrChaseMeta> &s_axis_tx_pcmeta,
 #endif
-					stream<txMsnRsp>&		msnTable2txExh_rsp,
-					stream<ap_uint<16> >&	txExh2msnTable_req,
-					stream<txReadReqUpdate>&	tx_readReqTable_upd,
-					stream<ap_uint<16> >&	lengthFifo,
-					stream<txPacketInfo>&	packetInfoFifo,
+				  stream<txMsnRsp> &msnTable2txExh_rsp,
+				  stream<ap_uint<16> > &txExh2msnTable_req,
+				  stream<txReadReqUpdate> &tx_readReqTable_upd,
+				  stream<ap_uint<16> > &lengthFifo,
+				  stream<txPacketInfo> &packetInfoFifo,
 #if RETRANS_EN
-					stream<ap_uint<24> >&	txSetTimer_req,
-					//stream<retransAddrLen>&		tx2retrans_insertAddrLen,
+				  stream<ap_uint<24> > &txSetTimer_req,
+// stream<retransAddrLen>&		tx2retrans_insertAddrLen,
 #endif
-					stream<net_axis<WIDTH> >&		output)
+				  stream<net_axis<WIDTH> > &output)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum ge_fsmStateType {META, GET_MSN, PROCESS};
+	enum ge_fsmStateType
+	{
+		META,
+		GET_MSN,
+		PROCESS
+	};
 	static ge_fsmStateType ge_state = META;
 	static event meta;
 	net_axis<WIDTH> sendWord;
 	static RdmaExHeader<WIDTH> rdmaHeader;
-	static AckExHeader<WIDTH>  ackHeader;
+	static AckExHeader<WIDTH> ackHeader;
 #if POINTER_CHASING_EN
 	static ptrChaseMeta pcMeta;
 	static RdmaPointerChaseHeader<WIDTH> pointerChaseHeader;
@@ -1029,9 +1111,7 @@ void generate_exh(	stream<event>&			metaIn,
 	ap_uint<16> udpLen;
 	txPacketInfo info;
 
-
-
-	switch(ge_state)
+	switch (ge_state)
 	{
 	case META:
 		if (!metaIn.empty())
@@ -1043,20 +1123,20 @@ void generate_exh(	stream<event>&			metaIn,
 #endif
 			metaIn.read(meta);
 			metaWritten = false;
-			//if (meta.op_code == RC_RDMA_READ_RESP_ONLY || meta.op_code == RC_RDMA_READ_RESP_FIRST || meta.op_code == RC_RDMA_READ_RESP_MIDDLE || meta.op_code == RC_RDMA_READ_RESP_LAST || meta.op_code == RC_ACK)
+			// if (meta.op_code == RC_RDMA_READ_RESP_ONLY || meta.op_code == RC_RDMA_READ_RESP_FIRST || meta.op_code == RC_RDMA_READ_RESP_MIDDLE || meta.op_code == RC_RDMA_READ_RESP_LAST || meta.op_code == RC_ACK)
 			{
 				txExh2msnTable_req.write(meta.qpn);
 				ge_state = GET_MSN;
 			}
-			//else
+			// else
 			{
 				// Start Timer for RDMW_WRITE_* & RDMA_READ_REQUEST
 
-				//txSetTimer_req.write(meta.qpn);
-				//ge_state = PROCESS;
+				// txSetTimer_req.write(meta.qpn);
+				// ge_state = PROCESS;
 			}
 #if RETRANS_EN
-			//TODO PART HIST
+			// TODO PART HIST
 			if (meta.op_code == RC_RDMA_WRITE_ONLY || meta.op_code == RC_RDMA_WRITE_FIRST || meta.op_code == RC_RDMA_WRITE_MIDDLE || meta.op_code == RC_RDMA_WRITE_LAST || meta.op_code == RC_RDMA_READ_REQUEST)
 			{
 				txSetTimer_req.write(meta.qpn);
@@ -1068,7 +1148,7 @@ void generate_exh(	stream<event>&			metaIn,
 #if POINTER_CHASING_EN
 		if (!msnTable2txExh_rsp.empty() && (meta.op_code != RC_RDMA_READ_POINTER_REQUEST || !s_axis_tx_pcmeta.empty()))
 #else
-		if (!msnTable2txExh_rsp.empty())// && (meta.op_code != RC_RDMA_READ_POINTER_REQUEST || !s_axis_tx_pcmeta.empty()))
+		if (!msnTable2txExh_rsp.empty()) // && (meta.op_code != RC_RDMA_READ_POINTER_REQUEST || !s_axis_tx_pcmeta.empty()))
 #endif
 		{
 			msnTable2txExh_rsp.read(msnMeta);
@@ -1082,282 +1162,287 @@ void generate_exh(	stream<event>&			metaIn,
 		}
 		break;
 	case PROCESS:
+	{
+		sendWord.last = 0;
+		switch (meta.op_code)
 		{
-			sendWord.last = 0;
-			switch(meta.op_code)
+		case RC_RDMA_WRITE_ONLY:
+		case RC_RDMA_WRITE_FIRST:
+		case RC_RDMA_PART_ONLY:
+		case RC_RDMA_PART_FIRST:
+		{
+			// [BTH][RETH][PayLd]
+			rdmaHeader.setVirtualAddress(meta.addr);
+			rdmaHeader.setLength(meta.length); // TODO Move up??
+			rdmaHeader.setRemoteKey(msnMeta.r_key);
+			ap_uint<8> remainingLength = rdmaHeader.consumeWord(sendWord.data);
+			sendWord.keep = ~0;
+			sendWord.last = (remainingLength == 0);
+			std::cout << "RDMA_WRITE_ONLY/FIRST ";
+			print(std::cout, sendWord);
+			std::cout << std::endl;
+			output.write(sendWord);
+			if (remainingLength == 0)
 			{
-			case RC_RDMA_WRITE_ONLY:
-			case RC_RDMA_WRITE_FIRST:
-			case RC_RDMA_PART_ONLY:
-			case RC_RDMA_PART_FIRST:
-			{
-				// [BTH][RETH][PayLd]
-				rdmaHeader.setVirtualAddress(meta.addr);
-				rdmaHeader.setLength(meta.length); //TODO Move up??
-				rdmaHeader.setRemoteKey(msnMeta.r_key);
-				ap_uint<8> remainingLength = rdmaHeader.consumeWord(sendWord.data);
-				sendWord.keep = ~0;
-				sendWord.last = (remainingLength == 0);
-				std::cout << "RDMA_WRITE_ONLY/FIRST ";
-				print(std::cout, sendWord);
-				std::cout << std::endl;
-				output.write(sendWord);
-				if (remainingLength == 0)
-				{
-					//TODO
-				}
-				if (!metaWritten) //TODO we are losing 1 cycle here
-				{
-					info.isAETH = false;
-					info.hasHeader = true;
-					info.hasPayload = (meta.length != 0); //TODO should be true
-					packetInfoFifo.write(info);
-
-
-					/*std::cout << "RDMA_WRITE_ONLY/FIRST ";
-					print(std::cout, sendWord);
-					std::cout << std::endl;
-					output.write(sendWord);*/
-
-					//BTH: 12, RETH: 16, PayLd: x, ICRC: 4
-					ap_uint<32> payloadLen = meta.length;
-					if ((meta.op_code == RC_RDMA_WRITE_FIRST) || (meta.op_code == RC_RDMA_PART_FIRST))
-					{
-						payloadLen = PMTU;
-					}
-					udpLen = 12+16+payloadLen+4; //TODO dma_len can be much larger, for multiple packets we need to split this into multiple packets
-					lengthFifo.write(udpLen);
-					//Store meta for retransmit
-/*#if RETRANS_EN
-					if (!meta.validPsn) //indicates retransmission
-					{
-						tx2retrans_insertAddrLen.write(retransAddrLen(meta.addr, meta.length));
-					}
-#endif*/
-					metaWritten = true;
-				}
-				break;
+				// TODO
 			}
-			case RC_RDMA_WRITE_MIDDLE:
-			case RC_RDMA_WRITE_LAST:
-			case RC_RDMA_PART_MIDDLE:
-			case RC_RDMA_PART_LAST:
-				// [BTH][PayLd]
+			if (!metaWritten) // TODO we are losing 1 cycle here
+			{
 				info.isAETH = false;
-				info.hasHeader = false;
-				info.hasPayload = (meta.length != 0); //TODO should be true
+				info.hasHeader = true;
+				info.hasPayload = (meta.length != 0); // TODO should be true
 				packetInfoFifo.write(info);
-				//BTH: 12, PayLd: x, ICRC: 4
-				udpLen = 12+meta.length+4;
-				lengthFifo.write(udpLen);
-				//Store meta for retransmit
-/*#if RETRANS_EN
-				if (!meta.validPsn) //indicates retransmission
-				{
-					tx2retrans_insertAddrLen.write(retransAddrLen(meta.addr, meta.length));
-				}
-#endif*/
-				ge_state = META;
-				break;
-			case RC_RDMA_READ_REQUEST:
-			case RC_RDMA_READ_CONSISTENT_REQUEST:
-			{
-				// [BTH][RETH]
-				rdmaHeader.setVirtualAddress(meta.addr);
-				rdmaHeader.setLength(meta.length); //TODO Move up??
-				rdmaHeader.setRemoteKey(msnMeta.r_key);
-				ap_uint<8> remainingLength = rdmaHeader.consumeWord(sendWord.data);
-				sendWord.keep = ~0;
-				sendWord.last = (remainingLength == 0);
-				std::cout << "RDMA_READ_RWQ ";
+
+				/*std::cout << "RDMA_WRITE_ONLY/FIRST ";
 				print(std::cout, sendWord);
 				std::cout << std::endl;
-				output.write(sendWord);
-				if (!metaWritten) //TODO we are losing 1 cycle here
+				output.write(sendWord);*/
+
+				// BTH: 12, RETH: 16, PayLd: x, ICRC: 4
+				ap_uint<32> payloadLen = meta.length;
+				if ((meta.op_code == RC_RDMA_WRITE_FIRST) || (meta.op_code == RC_RDMA_PART_FIRST))
 				{
-					info.isAETH = false;
-					info.hasHeader = true;
-					info.hasPayload = false; //(meta.length != 0); //TODO should be true
-					packetInfoFifo.write(info);
-
-					/*std::cout << "RDMA_READ_RWQ ";
-					print(std::cout, sendWord);
-					std::cout << std::endl;
-					output.write(sendWord);*/
-
-					//BTH: 12, RETH: 16, PayLd: x, ICRC: 4
-					udpLen = 12+16+0+4; //TODO dma_len can be much larger, for multiple packets we need to split this into multiple packets
-					lengthFifo.write(udpLen);
-					//Update Read Req max FWD header, TODO it is not exacly clear if meta.psn or meta.psn+numPkgs should be used
-					//TODO i think psn is only used here!!
-					tx_readReqTable_upd.write(txReadReqUpdate(meta.qpn, meta.psn));
-					//Store meta for retransmit
-/*#if RETRANS_EN
-					if (!meta.validPsn) //indicates retransmission
-					{
-						tx2retrans_insertAddrLen.write(retransAddrLen(meta.addr, meta.length));
-					}
-#endif*/
-					metaWritten = true;
+					payloadLen = PMTU;
 				}
-				break;
+				udpLen = 12 + 16 + payloadLen + 4; // TODO dma_len can be much larger, for multiple packets we need to split this into multiple packets
+				lengthFifo.write(udpLen);
+				// Store meta for retransmit
+				/*#if RETRANS_EN
+									if (!meta.validPsn) //indicates retransmission
+									{
+										tx2retrans_insertAddrLen.write(retransAddrLen(meta.addr, meta.length));
+									}
+				#endif*/
+				metaWritten = true;
 			}
+			break;
+		}
+		case RC_RDMA_WRITE_MIDDLE:
+		case RC_RDMA_WRITE_LAST:
+		case RC_RDMA_PART_MIDDLE:
+		case RC_RDMA_PART_LAST:
+			// [BTH][PayLd]
+			info.isAETH = false;
+			info.hasHeader = false;
+			info.hasPayload = (meta.length != 0); // TODO should be true
+			packetInfoFifo.write(info);
+			// BTH: 12, PayLd: x, ICRC: 4
+			udpLen = 12 + meta.length + 4;
+			lengthFifo.write(udpLen);
+			// Store meta for retransmit
+			/*#if RETRANS_EN
+							if (!meta.validPsn) //indicates retransmission
+							{
+								tx2retrans_insertAddrLen.write(retransAddrLen(meta.addr, meta.length));
+							}
+			#endif*/
+			ge_state = META;
+			break;
+		case RC_RDMA_READ_REQUEST:
+		case RC_RDMA_READ_CONSISTENT_REQUEST:
+		{
+			// [BTH][RETH]
+			rdmaHeader.setVirtualAddress(meta.addr);
+			rdmaHeader.setLength(meta.length); // TODO Move up??
+			rdmaHeader.setRemoteKey(msnMeta.r_key);
+			ap_uint<8> remainingLength = rdmaHeader.consumeWord(sendWord.data);
+			sendWord.keep = ~0;
+			sendWord.last = (remainingLength == 0);
+			std::cout << "RDMA_READ_RWQ ";
+			print(std::cout, sendWord);
+			std::cout << std::endl;
+			output.write(sendWord);
+			if (!metaWritten) // TODO we are losing 1 cycle here
+			{
+				info.isAETH = false;
+				info.hasHeader = true;
+				info.hasPayload = false; //(meta.length != 0); //TODO should be true
+				packetInfoFifo.write(info);
+
+				/*std::cout << "RDMA_READ_RWQ ";
+				print(std::cout, sendWord);
+				std::cout << std::endl;
+				output.write(sendWord);*/
+
+				// BTH: 12, RETH: 16, PayLd: x, ICRC: 4
+				udpLen = 12 + 16 + 0 + 4; // TODO dma_len can be much larger, for multiple packets we need to split this into multiple packets
+				lengthFifo.write(udpLen);
+				// Update Read Req max FWD header, TODO it is not exacly clear if meta.psn or meta.psn+numPkgs should be used
+				// TODO i think psn is only used here!!
+				tx_readReqTable_upd.write(txReadReqUpdate(meta.qpn, meta.psn));
+				// Store meta for retransmit
+				/*#if RETRANS_EN
+									if (!meta.validPsn) //indicates retransmission
+									{
+										tx2retrans_insertAddrLen.write(retransAddrLen(meta.addr, meta.length));
+									}
+				#endif*/
+				metaWritten = true;
+			}
+			break;
+		}
 #if POINTER_CHASING_EN
-			case RC_RDMA_READ_POINTER_REQUEST:
+		case RC_RDMA_READ_POINTER_REQUEST:
+		{
+			// [BTH][RCTH]
+			pointerChaseHeader.setVirtualAddress(meta.addr);
+			pointerChaseHeader.setLength(meta.length); // TODO Move up??
+			pointerChaseHeader.setRemoteKey(msnMeta.r_key);
+			pointerChaseHeader.setPredicateKey(pcMeta.key);
+			pointerChaseHeader.setPredicateMask(pcMeta.mask);
+			pointerChaseHeader.setPredicateOp(pcMeta.op);
+			pointerChaseHeader.setPtrOffset(pcMeta.ptrOffset);
+			pointerChaseHeader.setIsRelPtr(pcMeta.relPtrOffset);
+			pointerChaseHeader.setNextPtrOffset(pcMeta.nextPtrOffset);
+			pointerChaseHeader.setNexPtrValid(pcMeta.nextPtrValid);
+
+			ap_uint<8> remainingLength = pointerChaseHeader.consumeWord(sendWord.data);
+			sendWord.keep = ~0; // 0xFFFFFFFF; //TODO, set as much as required
+			sendWord.last = (remainingLength == 0);
+			std::cout << "RC_RDMA_READ_POINTER_REQUEST ";
+			print(std::cout, sendWord);
+			std::cout << std::endl;
+			output.write(sendWord);
+			if (!metaWritten) // TODO we are losing 1 cycle here
 			{
-				// [BTH][RCTH]
-				pointerChaseHeader.setVirtualAddress(meta.addr);
-				pointerChaseHeader.setLength(meta.length); //TODO Move up??
-				pointerChaseHeader.setRemoteKey(msnMeta.r_key);
-				pointerChaseHeader.setPredicateKey(pcMeta.key);
-				pointerChaseHeader.setPredicateMask(pcMeta.mask);
-				pointerChaseHeader.setPredicateOp(pcMeta.op);
-				pointerChaseHeader.setPtrOffset(pcMeta.ptrOffset);
-				pointerChaseHeader.setIsRelPtr(pcMeta.relPtrOffset);
-				pointerChaseHeader.setNextPtrOffset(pcMeta.nextPtrOffset);
-				pointerChaseHeader.setNexPtrValid(pcMeta.nextPtrValid);
-				
-				ap_uint<8> remainingLength = pointerChaseHeader.consumeWord(sendWord.data);
-				sendWord.keep = ~0; //0xFFFFFFFF; //TODO, set as much as required
-				sendWord.last = (remainingLength == 0);
-				std::cout << "RC_RDMA_READ_POINTER_REQUEST ";
+				info.isAETH = false; // TODO fix this
+				info.hasHeader = true;
+				info.hasPayload = false; //(meta.length != 0); //TODO should be true
+				packetInfoFifo.write(info);
+
+				/*std::cout << "RC_RDMA_READ_POINTER_REQUEST ";
+				print(std::cout, sendWord);
+				std::cout << std::endl;
+				output.write(sendWord);*/
+
+				// BTH: 12, RCTH: 28, PayLd: x, ICRC: 4
+				udpLen = 12 + 28 + 0 + 4;
+				lengthFifo.write(udpLen);
+				// Update Read Req max FWD header, TODO it is not exacly clear if meta.psn or meta.psn+numPkgs should be used
+				// TODO i think psn is only used here!!
+				tx_readReqTable_upd.write(txReadReqUpdate(meta.qpn, meta.psn));
+				// Store meta for retransmit
+				/*#if RETRANS_EN
+									if (!meta.validPsn) //indicates retransmission
+									{
+										tx2retrans_insertAddrLen.write(retransAddrLen(meta.addr, meta.length));
+									}
+				#endif*/
+				metaWritten = true;
+			}
+			break;
+		}
+#endif
+		case RC_RDMA_READ_RESP_ONLY:
+		case RC_RDMA_READ_RESP_FIRST:
+		case RC_RDMA_READ_RESP_LAST:
+		{
+			// [BTH][AETH][PayLd]
+			// AETH for first and last
+			ackHeader.setSyndrome(0x1f);
+			ackHeader.setMsn(msnMeta.msn);
+			std::cout << "RDMA_READ_RESP MSN:" << ackHeader.getMsn() << std::endl;
+			ackHeader.consumeWord(sendWord.data); // TODO
+			{
+				info.isAETH = true;
+				info.hasHeader = true;
+				info.hasPayload = (meta.length != 0); // TODO should be true
+				packetInfoFifo.write(info);
+
+				sendWord.keep((AETH_SIZE / 8) - 1, 0) = 0xFF;
+				sendWord.keep((WIDTH / 8) - 1, (AETH_SIZE / 8)) = 0;
+				sendWord.last = 1;
+
+				std::cout << "RDMA_READ_RESP ";
 				print(std::cout, sendWord);
 				std::cout << std::endl;
 				output.write(sendWord);
-				if (!metaWritten)//TODO we are losing 1 cycle here
-				{
-					info.isAETH = false; //TODO fix this
-					info.hasHeader = true;
-					info.hasPayload = false; //(meta.length != 0); //TODO should be true
-					packetInfoFifo.write(info);
 
-
-					/*std::cout << "RC_RDMA_READ_POINTER_REQUEST ";
-					print(std::cout, sendWord);
-					std::cout << std::endl;
-					output.write(sendWord);*/
-
-					//BTH: 12, RCTH: 28, PayLd: x, ICRC: 4
-					udpLen = 12+28+0+4;
-					lengthFifo.write(udpLen);
-					//Update Read Req max FWD header, TODO it is not exacly clear if meta.psn or meta.psn+numPkgs should be used
-					//TODO i think psn is only used here!!
-					tx_readReqTable_upd.write(txReadReqUpdate(meta.qpn, meta.psn));
-					//Store meta for retransmit
-/*#if RETRANS_EN
-					if (!meta.validPsn) //indicates retransmission
-					{
-						tx2retrans_insertAddrLen.write(retransAddrLen(meta.addr, meta.length));
-					}
-#endif*/
-					metaWritten = true;
-				}
-				break;
-			}
-#endif
-			case RC_RDMA_READ_RESP_ONLY:
-			case RC_RDMA_READ_RESP_FIRST:
-			case RC_RDMA_READ_RESP_LAST:
-			{
-				// [BTH][AETH][PayLd]
-				//AETH for first and last
-				ackHeader.setSyndrome(0x1f);
-				ackHeader.setMsn(msnMeta.msn);
-				std::cout << "RDMA_READ_RESP MSN:" << ackHeader.getMsn() << std::endl;
-				ackHeader.consumeWord(sendWord.data); //TODO
-				{
-					info.isAETH = true;
-					info.hasHeader = true;
-					info.hasPayload = (meta.length != 0); //TODO should be true
-					packetInfoFifo.write(info);
-
-					sendWord.keep((AETH_SIZE/8)-1, 0) = 0xFF;
-					sendWord.keep((WIDTH/8)-1, (AETH_SIZE/8)) = 0;
-					sendWord.last = 1;
-
-					std::cout << "RDMA_READ_RESP ";
-					print(std::cout, sendWord);
-					std::cout << std::endl;
-					output.write(sendWord);
-
-					//BTH: 12, AETH: 4, PayLd: x, ICRC: 4
-					udpLen = 12+4+meta.length+4;
-					//std::cout << "length: " << tempLen << ", dma len: " << meta.length << std::endl;
-					lengthFifo.write(udpLen);
-				}
-				break;
-			}
-			case RC_RDMA_READ_RESP_MIDDLE:
-				// [BTH][PayLd]
-				info.isAETH = true;
-				info.hasHeader = false;
-				info.hasPayload = (meta.length != 0); //TODO should be true
-				packetInfoFifo.write(info);
-				//BTH: 12, PayLd: x, ICRC: 4
-				udpLen = 12+meta.length+4;
+				// BTH: 12, AETH: 4, PayLd: x, ICRC: 4
+				udpLen = 12 + 4 + meta.length + 4;
+				// std::cout << "length: " << tempLen << ", dma len: " << meta.length << std::endl;
 				lengthFifo.write(udpLen);
-				ge_state = META;
-				break;
-			case RC_ACK:
-			{
-				// [BTH][AETH]
-				//Check if ACK or NAK
-				if (!meta.isNak)
-				{
-					ackHeader.setSyndrome(0x1f);
-				}
-				else
-				{
-					//PSN SEQ error
-					ackHeader.setSyndrome(0x60);
-				}
-				ackHeader.setMsn(msnMeta.msn);
-				std::cout << "RC_ACK MSN:" << ackHeader.getMsn() << std::endl;
-				ackHeader.consumeWord(sendWord.data); //TODO
-				{
-					info.isAETH = true;
-					info.hasHeader = true;
-					info.hasPayload = false;
-					packetInfoFifo.write(info);
-
-					sendWord.keep(AETH_SIZE/8-1, 0) = 0xFF;
-					sendWord.keep((WIDTH/8)-1, (AETH_SIZE/8)) = 0;
-					sendWord.last = 1;
-
-					std::cout << "RC_ACK ";
-					print(std::cout, sendWord);
-					std::cout << std::endl;
-					output.write(sendWord);
-
-					//BTH: 12, AETH: 4, ICRC: 4
-					lengthFifo.write(12+4+4);
-				}
-				break;
 			}
-			default:
-				break;
-			} //switch
-		} //if empty
+			break;
+		}
+		case RC_RDMA_READ_RESP_MIDDLE:
+			// [BTH][PayLd]
+			info.isAETH = true;
+			info.hasHeader = false;
+			info.hasPayload = (meta.length != 0); // TODO should be true
+			packetInfoFifo.write(info);
+			// BTH: 12, PayLd: x, ICRC: 4
+			udpLen = 12 + meta.length + 4;
+			lengthFifo.write(udpLen);
+			ge_state = META;
+			break;
+		case RC_ACK:
+		{
+			// [BTH][AETH]
+			// Check if ACK or NAK
+			if (!meta.isNak)
+			{
+				ackHeader.setSyndrome(0x1f);
+			}
+			else
+			{
+				// PSN SEQ error
+				ackHeader.setSyndrome(0x60);
+			}
+			ackHeader.setMsn(msnMeta.msn);
+			std::cout << "RC_ACK MSN:" << ackHeader.getMsn() << std::endl;
+			ackHeader.consumeWord(sendWord.data); // TODO
+			{
+				info.isAETH = true;
+				info.hasHeader = true;
+				info.hasPayload = false;
+				packetInfoFifo.write(info);
+
+				sendWord.keep(AETH_SIZE / 8 - 1, 0) = 0xFF;
+				sendWord.keep((WIDTH / 8) - 1, (AETH_SIZE / 8)) = 0;
+				sendWord.last = 1;
+
+				std::cout << "RC_ACK ";
+				print(std::cout, sendWord);
+				std::cout << std::endl;
+				output.write(sendWord);
+
+				// BTH: 12, AETH: 4, ICRC: 4
+				lengthFifo.write(12 + 4 + 4);
+			}
+			break;
+		}
+		default:
+			break;
+		} // switch
+	} // if empty
 		if (sendWord.last)
 		{
 			ge_state = META;
 		}
 		break;
-	}//switch
+	} // switch
 }
 
 template <int WIDTH>
-void append_payload(stream<txPacketInfo>&	packetInfoFifo,
-					stream<net_axis<WIDTH> >&	tx_headerFifo,
-					stream<net_axis<WIDTH> >&	tx_aethPayloadFifo,
-					stream<net_axis<WIDTH> >&	tx_rethPayloadFifo,
-					stream<net_axis<WIDTH> >&	tx_rawPayloadFifo,
-					stream<net_axis<WIDTH> >&	tx_packetFifo)
+void append_payload(stream<txPacketInfo> &packetInfoFifo,
+					stream<net_axis<WIDTH> > &tx_headerFifo,
+					stream<net_axis<WIDTH> > &tx_aethPayloadFifo,
+					stream<net_axis<WIDTH> > &tx_rethPayloadFifo,
+					stream<net_axis<WIDTH> > &tx_rawPayloadFifo,
+					stream<net_axis<WIDTH> > &tx_packetFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum fsmState {INFO, HEADER, AETH_PAYLOAD, RETH_PAYLOAD, RAW_PAYLOAD};
+	enum fsmState
+	{
+		INFO,
+		HEADER,
+		AETH_PAYLOAD,
+		RETH_PAYLOAD,
+		RAW_PAYLOAD
+	};
 	static fsmState state = INFO;
 	static net_axis<WIDTH> prevWord;
 	net_axis<WIDTH> currWord;
@@ -1392,12 +1477,12 @@ void append_payload(stream<txPacketInfo>&	packetInfoFifo,
 			/*std::cout << "HEADER:";
 			print(std::cout, prevWord);
 			std::cout << std::endl;*/
-			//TODO last is not necessary
+			// TODO last is not necessary
 			if (!prevWord.last) // || prevWord.keep[(WIDTH/8)-1] == 1) //One of them should be sufficient..
 			{
 				tx_packetFifo.write(prevWord);
 			}
-			else //last
+			else // last
 			{
 				if (!info.hasPayload)
 				{
@@ -1411,7 +1496,7 @@ void append_payload(stream<txPacketInfo>&	packetInfoFifo,
 					{
 						state = AETH_PAYLOAD;
 					}
-					else //RETH
+					else // RETH
 					{
 						if (WIDTH <= RETH_SIZE)
 						{
@@ -1467,7 +1552,6 @@ void append_payload(stream<txPacketInfo>&	packetInfoFifo,
 			print(std::cout, sendWord);
 			std::cout << std::endl;
 
-
 			tx_packetFifo.write(sendWord);
 			if (currWord.last)
 			{
@@ -1489,16 +1573,22 @@ void append_payload(stream<txPacketInfo>&	packetInfoFifo,
 	}
 }
 
-//TODO this introduces 1 cycle for WIDTH > 64
+// TODO this introduces 1 cycle for WIDTH > 64
 template <int WIDTH>
-void prepend_ibh_header(stream<BaseTransportHeader<WIDTH> >& tx_ibhHeaderFifo,
-						stream<net_axis<WIDTH> >& tx_ibhPayloadFifo,
-						stream<net_axis<WIDTH> >& m_axis_tx_data)
+void prepend_ibh_header(stream<BaseTransportHeader<WIDTH> > &tx_ibhHeaderFifo,
+						stream<net_axis<WIDTH> > &tx_ibhPayloadFifo,
+						stream<net_axis<WIDTH> > &m_axis_tx_data)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum pihStatea {GET_HEADER, HEADER, PARTIAL_HEADER, BODY};
+	enum pihStatea
+	{
+		GET_HEADER,
+		HEADER,
+		PARTIAL_HEADER,
+		BODY
+	};
 	static pihStatea state = GET_HEADER;
 	static BaseTransportHeader<WIDTH> header;
 	static ap_uint<WIDTH> headerData;
@@ -1523,7 +1613,7 @@ void prepend_ibh_header(stream<BaseTransportHeader<WIDTH> >& tx_ibhHeaderFifo,
 	case HEADER:
 	{
 		ap_uint<8> remainingLength = header.consumeWord(currWord.data);
-		if (remainingLength < (WIDTH/8))
+		if (remainingLength < (WIDTH / 8))
 		{
 			state = PARTIAL_HEADER;
 		}
@@ -1573,24 +1663,27 @@ void prepend_ibh_header(stream<BaseTransportHeader<WIDTH> >& tx_ibhHeaderFifo,
 	}
 }
 
-
-void local_req_handler(	stream<txMeta>&				s_axis_tx_meta,
+void local_req_handler(stream<txMeta> &s_axis_tx_meta,
 #if RETRANS_EN
-						stream<retransEvent>&		retransEventFifo,
+					   stream<retransEvent> &retransEventFifo,
 #endif
-						stream<memCmdInternal>&		tx_local_memCmdFifo, //TODO rename
-						stream<mqInsertReq<ap_uint<64> > >&		tx_localReadAddrFifo,
+					   stream<memCmdInternal> &tx_local_memCmdFifo, // TODO rename
+					   stream<mqInsertReq<ap_uint<64> > > &tx_localReadAddrFifo,
 #if !RETRANS_EN
-						stream<event>&				tx_localTxMeta)
+					   stream<event> &tx_localTxMeta)
 #else
-						stream<event>&				tx_localTxMeta,
-						stream<retransAddrLen>&		tx2retrans_insertAddrLen)
+					   stream<event> &tx_localTxMeta,
+					   stream<retransAddrLen> &tx2retrans_insertAddrLen)
 #endif
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum fsmStateType {META, GENERATE};
+	enum fsmStateType
+	{
+		META,
+		GENERATE
+	};
 	static fsmStateType lrh_state;
 	static txMeta meta;
 
@@ -1648,7 +1741,7 @@ void local_req_handler(	stream<txMeta>&				s_axis_tx_meta,
 				tx2retrans_insertAddrLen.write(retransAddrLen(meta.local_vaddr, meta.remote_vaddr, meta.length));
 #endif
 			}
-			else //APP_WRITE, APP_PART
+			else // APP_WRITE, APP_PART
 			{
 				laddr = meta.local_vaddr;
 				raddr = meta.remote_vaddr;
@@ -1663,7 +1756,7 @@ void local_req_handler(	stream<txMeta>&				s_axis_tx_meta,
 					writeOpcode = (meta.op_code == APP_PART) ? RC_RDMA_PART_FIRST : RC_RDMA_WRITE_FIRST;
 					lrh_state = GENERATE;
 				}
-				//TODO retintroduce this functionality
+				// TODO retintroduce this functionality
 				/*if (dmaLength > PCIE_BATCH_SIZE)
 				{
 					dmaLength -= PCIE_BATCH_SIZE;
@@ -1673,7 +1766,7 @@ void local_req_handler(	stream<txMeta>&				s_axis_tx_meta,
 				{
 					tx_local_memCmdFifo.write(memCmdInternal(meta.qpn, laddr, dmaLength));
 				}
-				//event needs to contain QP, opCode, length, psn
+				// event needs to contain QP, opCode, length, psn
 				tx_localTxMeta.write(event(writeOpcode, meta.qpn, raddr, dmaLength));
 #if RETRANS_EN
 				tx2retrans_insertAddrLen.write(retransAddrLen(laddr, raddr, dmaLength));
@@ -1698,25 +1791,22 @@ void local_req_handler(	stream<txMeta>&				s_axis_tx_meta,
 			writeOpcode = (meta.op_code == APP_PART) ? RC_RDMA_PART_LAST : RC_RDMA_WRITE_LAST;
 			lrh_state = META;
 		}
-		//tx_local_memCmdFifo.write(memCmdInternal(meta.qpn, laddr, length, (writeOpcode == RC_RDMA_WRITE_LAST || writeOpcode == RC_RDMA_PART_LAST)));
+		// tx_local_memCmdFifo.write(memCmdInternal(meta.qpn, laddr, length, (writeOpcode == RC_RDMA_WRITE_LAST || writeOpcode == RC_RDMA_PART_LAST)));
 		tx_localTxMeta.write(event(writeOpcode, meta.qpn, raddr, length));
 #if RETRANS_EN
 		tx2retrans_insertAddrLen.write(retransAddrLen(laddr, raddr, length));
 #endif
 		break;
-	} //switch
-
+	} // switch
 }
 
-
-
-//TODO this only works with axi width 64
+// TODO this only works with axi width 64
 template <int WIDTH>
-void fpga_data_handler(	stream<net_axis<WIDTH> >&	s_axis_tx_data,
-						stream<net_axis<WIDTH> >&	appTxData) //switch to internal format
+void fpga_data_handler(stream<net_axis<WIDTH> > &s_axis_tx_data,
+					   stream<net_axis<WIDTH> > &appTxData) // switch to internal format
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
 	static ap_uint<16> remainingLength;
 
@@ -1725,7 +1815,7 @@ void fpga_data_handler(	stream<net_axis<WIDTH> >&	s_axis_tx_data,
 	if (!s_axis_tx_data.empty())
 	{
 		s_axis_tx_data.read(currWord);
-		remainingLength -= (WIDTH/8); //TODO only works with WIDTH == 64
+		remainingLength -= (WIDTH / 8); // TODO only works with WIDTH == 64
 		if (remainingLength == 0)
 		{
 			currWord.last = 1;
@@ -1733,7 +1823,6 @@ void fpga_data_handler(	stream<net_axis<WIDTH> >&	s_axis_tx_data,
 		}
 		appTxData.write(currWord);
 	}
-
 }
 
 /*
@@ -1741,20 +1830,20 @@ void fpga_data_handler(	stream<net_axis<WIDTH> >&	s_axis_tx_data,
  * rx_readEvenFifo READ events from RX side
  * tx_appMetaFifo, retransmission events, WRITEs and READ_REQ only
  */
-void meta_merger(	stream<ackEvent>&	rx_ackEventFifo,
-					stream<event>&		rx_readEvenFifo,
-					stream<event>&		tx_appMetaFifo,
-					//stream<event>&		timer2exhFifo,
-					stream<ap_uint<16> >&	tx_connTable_req,
-					stream<ibhMeta>&	tx_ibhMetaFifo,
-					stream<event>&		tx_exhMetaFifo)
+void meta_merger(stream<ackEvent> &rx_ackEventFifo,
+				 stream<event> &rx_readEvenFifo,
+				 stream<event> &tx_appMetaFifo,
+				 // stream<event>&		timer2exhFifo,
+				 stream<ap_uint<16> > &tx_connTable_req,
+				 stream<ibhMeta> &tx_ibhMetaFifo,
+				 stream<event> &tx_exhMetaFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
 	ackEvent aev;
 	event ev;
-	ap_uint<16> key = 0; //TODO hack
+	ap_uint<16> key = 0; // TODO hack
 
 	if (!rx_ackEventFifo.empty())
 	{
@@ -1773,22 +1862,22 @@ void meta_merger(	stream<ackEvent>&	rx_ackEventFifo,
 		tx_ibhMetaFifo.write(ibhMeta(ev.op_code, key, ev.qpn, ev.psn, ev.validPsn));
 		tx_exhMetaFifo.write(ev);
 	}
-	else if (!tx_appMetaFifo.empty()) //TODO rename
+	else if (!tx_appMetaFifo.empty()) // TODO rename
 	{
 		tx_appMetaFifo.read(ev);
 
 		ap_uint<22> numPkg = 1;
 		if (ev.op_code == RC_RDMA_READ_REQUEST || ev.op_code == RC_RDMA_READ_POINTER_REQUEST || ev.op_code == RC_RDMA_READ_CONSISTENT_REQUEST)
 		{
-			numPkg = (ev.length+(PMTU-1)) / PMTU;
+			numPkg = (ev.length + (PMTU - 1)) / PMTU;
 		}
 
 		tx_connTable_req.write(ev.qpn(15, 0));
-		if (ev.validPsn) //retransmit
+		if (ev.validPsn) // retransmit
 		{
 			tx_ibhMetaFifo.write(ibhMeta(ev.op_code, key, ev.qpn, ev.psn, ev.validPsn));
 		}
-		else //local
+		else // local
 		{
 			tx_ibhMetaFifo.write(ibhMeta(ev.op_code, key, ev.qpn, numPkg));
 		}
@@ -1805,19 +1894,19 @@ void meta_merger(	stream<ackEvent>&	rx_ackEventFifo,
 	}*/
 }
 
-//TODO maybe all ACKS should be triggered by ibhFSM?? what is the guarantee we should/have to give
-//TODO this should become a BRAM, storage type of thing
+// TODO maybe all ACKS should be triggered by ibhFSM?? what is the guarantee we should/have to give
+// TODO this should become a BRAM, storage type of thing
 template <int WIDTH>
-void ipUdpMetaHandler(	stream<ipUdpMeta>&		input,
-						stream<ExHeader<WIDTH> >& exHeaderInput,
-						stream<fwdPolicy>&			dropMetaIn,
-						//stream<dstTuple>&		output,
-						//stream<ap_uint<16> >&	remcrc_lengthFifo,
-						stream<ap_uint<16> >&	exh_lengthFifo,
-						stream<ExHeader<WIDTH> >& exHeaderOutput)
+void ipUdpMetaHandler(stream<ipUdpMeta> &input,
+					  stream<ExHeader<WIDTH> > &exHeaderInput,
+					  stream<fwdPolicy> &dropMetaIn,
+					  // stream<dstTuple>&		output,
+					  // stream<ap_uint<16> >&	remcrc_lengthFifo,
+					  stream<ap_uint<16> > &exh_lengthFifo,
+					  stream<ExHeader<WIDTH> > &exHeaderOutput)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
 	ipUdpMeta meta;
 	ExHeader<WIDTH> header;
@@ -1829,27 +1918,26 @@ void ipUdpMetaHandler(	stream<ipUdpMeta>&		input,
 		input.read(meta);
 		exHeaderInput.read(header);
 		dropMetaIn.read(policy);
-		if (!policy.isDrop) //TODO clean this up
+		if (!policy.isDrop) // TODO clean this up
 		{
 			if (!policy.ackOnly)
 			{
-				//remcrc_lengthFifo.write(meta.length - (8 + 12 + 4)); //UDP + BTH + CRC
+				// remcrc_lengthFifo.write(meta.length - (8 + 12 + 4)); //UDP + BTH + CRC
 				exh_lengthFifo.write(meta.length);
 				exHeaderOutput.write(header);
-
 			}
-			//output.write(dstTuple(meta.their_address, meta.their_port));
+			// output.write(dstTuple(meta.their_address, meta.their_port));
 		}
 	}
 }
 
-void tx_ipUdpMetaMerger(	stream<connTableEntry>& tx_connTable2ibh_rsp,
-							stream<ap_uint<16> >&	tx_lengthFifo,
-							stream<ipUdpMeta>&		m_axis_tx_meta,
-							stream<ap_uint<24> >&	tx_dstQpFifo)
+void tx_ipUdpMetaMerger(stream<connTableEntry> &tx_connTable2ibh_rsp,
+						stream<ap_uint<16> > &tx_lengthFifo,
+						stream<ipUdpMeta> &m_axis_tx_meta,
+						stream<ap_uint<24> > &tx_dstQpFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
 	connTableEntry connMeta;
 	ap_uint<16> len;
@@ -1864,20 +1952,24 @@ void tx_ipUdpMetaMerger(	stream<connTableEntry>& tx_connTable2ibh_rsp,
 	}
 }
 
-void qp_interface(	stream<qpContext>& 			contextIn,
-					stream<stateTableEntry>&	stateTable2qpi_rsp,
-					stream<ifStateReq>&			qpi2stateTable_upd_req,
-					stream<ifMsnReq>&			if2msnTable_init)
+void qp_interface(stream<qpContext> &contextIn,
+				  stream<stateTableEntry> &stateTable2qpi_rsp,
+				  stream<ifStateReq> &qpi2stateTable_upd_req,
+				  stream<ifMsnReq> &if2msnTable_init)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum fstStateType{GET_STATE, UPD_STATE};
+	enum fstStateType
+	{
+		GET_STATE,
+		UPD_STATE
+	};
 	static fstStateType qp_fsmState = GET_STATE;
 	static qpContext context;
 	stateTableEntry state;
 
-	switch(qp_fsmState)
+	switch (qp_fsmState)
 	{
 	case GET_STATE:
 		if (!contextIn.empty())
@@ -1891,19 +1983,19 @@ void qp_interface(	stream<qpContext>& 			contextIn,
 		if (!stateTable2qpi_rsp.empty())
 		{
 			stateTable2qpi_rsp.read(state);
-			//TODO check if valid transition
+			// TODO check if valid transition
 			qpi2stateTable_upd_req.write(ifStateReq(context.qp_num, context.newState, context.remote_psn, context.local_psn));
-			if2msnTable_init.write(ifMsnReq(context.qp_num, context.r_key)); //TODO store virtual address somewhere??
+			if2msnTable_init.write(ifMsnReq(context.qp_num, context.r_key)); // TODO store virtual address somewhere??
 			qp_fsmState = GET_STATE;
 		}
 		break;
 	}
 }
 
-void three_merger(stream<event>& in0, stream<event>& in1, stream<event>& in2, stream<event>& out)
+void three_merger(stream<event> &in0, stream<event> &in1, stream<event> &in2, stream<event> &out)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
 	if (!in0.empty())
 	{
@@ -1920,13 +2012,13 @@ void three_merger(stream<event>& in0, stream<event>& in1, stream<event>& in2, st
 }
 
 template <int WIDTH>
-void mem_cmd_merger(stream<memCmdInternal>& remoteReadRequests,
-					stream<memCmdInternal>& localReadRequests,
-					stream<routedMemCmd>&			out,
-					stream<pkgInfo>&		pkgInfoFifo)
+void mem_cmd_merger(stream<memCmdInternal> &remoteReadRequests,
+					stream<memCmdInternal> &localReadRequests,
+					stream<routedMemCmd> &out,
+					stream<pkgInfo> &pkgInfoFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
 	memCmdInternal cmd;
 
@@ -1937,37 +2029,36 @@ void mem_cmd_merger(stream<memCmdInternal>& remoteReadRequests,
 #if POINTER_CHASING_EN
 		if (cmd.route == ROUTE_CUSTOM)
 		{
-			pkgInfoFifo.write(pkgInfo(AETH, FIFO, ((cmd.len+(WIDTH/8)-1)/(WIDTH/8))));
+			pkgInfoFifo.write(pkgInfo(AETH, FIFO, ((cmd.len + (WIDTH / 8) - 1) / (WIDTH / 8))));
 		}
 		else
 #endif
 		{
-			pkgInfoFifo.write(pkgInfo(AETH, MEM, ((cmd.len+(WIDTH/8)-1)/(WIDTH/8))));
+			pkgInfoFifo.write(pkgInfo(AETH, MEM, ((cmd.len + (WIDTH / 8) - 1) / (WIDTH / 8))));
 		}
 	}
 	else if (!localReadRequests.empty())
 	{
 		localReadRequests.read(cmd);
-		//CHECK if data in memory
+		// CHECK if data in memory
 		if (cmd.addr != 0)
 		{
 			out.write(routedMemCmd(cmd.addr, cmd.len, cmd.route));
-			pkgInfoFifo.write(pkgInfo(RETH, MEM, ((cmd.len+(WIDTH/8)-1)/(WIDTH/8))));
+			pkgInfoFifo.write(pkgInfo(RETH, MEM, ((cmd.len + (WIDTH / 8) - 1) / (WIDTH / 8))));
 		}
 		else
 		{
-			pkgInfoFifo.write(pkgInfo(RETH, FIFO, ((cmd.len+(WIDTH/8)-1)/(WIDTH/8))));
+			pkgInfoFifo.write(pkgInfo(RETH, FIFO, ((cmd.len + (WIDTH / 8) - 1) / (WIDTH / 8))));
 		}
 	}
-
 }
 
-void merge_retrans_request(	stream<retransMeta>&		tx2retrans_insertMeta,
-							stream<retransAddrLen>&		tx2retrans_insertAddrLen,
-							stream<retransEntry>&		tx2retrans_insertRequest)
+void merge_retrans_request(stream<retransMeta> &tx2retrans_insertMeta,
+						   stream<retransAddrLen> &tx2retrans_insertAddrLen,
+						   stream<retransEntry> &tx2retrans_insertRequest)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
 	retransMeta meta;
 	retransAddrLen addrlen;
@@ -1981,16 +2072,22 @@ void merge_retrans_request(	stream<retransMeta>&		tx2retrans_insertMeta,
 }
 
 template <int WIDTH>
-void merge_rx_pkgs(	stream<pkgShiftType>&	rx_pkgShiftTypeFifo,
-					stream<net_axis<WIDTH> >&		rx_aethSift2mergerFifo,
-					stream<routed_net_axis<WIDTH> >&	rx_rethSift2mergerFifo,
-					stream<routed_net_axis<WIDTH> >&	rx_NoSift2mergerFifo,
-					stream<routed_net_axis<WIDTH> >&	m_axis_mem_write_data)
+void merge_rx_pkgs(stream<pkgShiftType> &rx_pkgShiftTypeFifo,
+				   stream<net_axis<WIDTH> > &rx_aethSift2mergerFifo,
+				   stream<routed_net_axis<WIDTH> > &rx_rethSift2mergerFifo,
+				   stream<routed_net_axis<WIDTH> > &rx_NoSift2mergerFifo,
+				   stream<routed_net_axis<WIDTH> > &m_axis_mem_write_data)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum mrpStateType{IDLE, FWD_AETH, FWD_RETH, FWD_NONE};
+	enum mrpStateType
+	{
+		IDLE,
+		FWD_AETH,
+		FWD_RETH,
+		FWD_NONE
+	};
 	static mrpStateType state = IDLE;
 
 	pkgShiftType type;
@@ -2050,21 +2147,30 @@ void merge_rx_pkgs(	stream<pkgShiftType>&	rx_pkgShiftTypeFifo,
 				state = IDLE;
 			}
 		}
-	}//switch
+	} // switch
 }
 
 template <int WIDTH>
-void tx_pkg_arbiter(stream<pkgInfo>&	tx_pkgInfoFifo,
-					stream<net_axis<WIDTH> >&	s_axis_tx_data,
-					stream<net_axis<WIDTH> >&	s_axis_mem_read_data,
-					stream<net_axis<WIDTH> >&	remoteReadData,
-					stream<net_axis<WIDTH> >&	localReadData,
-					stream<net_axis<WIDTH> >&	rawPayFifo)
+void tx_pkg_arbiter(stream<pkgInfo> &tx_pkgInfoFifo,
+					stream<net_axis<WIDTH> > &s_axis_tx_data,
+					stream<net_axis<WIDTH> > &s_axis_mem_read_data,
+					stream<net_axis<WIDTH> > &remoteReadData,
+					stream<net_axis<WIDTH> > &localReadData,
+					stream<net_axis<WIDTH> > &rawPayFifo)
 {
 #pragma HLS inline off
-#pragma HLS pipeline II=1
+#pragma HLS pipeline II = 1
 
-	enum mrpStateType{IDLE, FWD_MEM_AETH, FWD_MEM_RETH, FWD_MEM_RAW, FWD_STREAM_AETH, FWD_STREAM_RETH, FWD_STREAM_RAW};
+	enum mrpStateType
+	{
+		IDLE,
+		FWD_MEM_AETH,
+		FWD_MEM_RETH,
+		FWD_MEM_RAW,
+		FWD_STREAM_AETH,
+		FWD_STREAM_RETH,
+		FWD_STREAM_RAW
+	};
 	static mrpStateType state = IDLE;
 	static ap_uint<8> wordCounter = 0;
 
@@ -2116,7 +2222,7 @@ void tx_pkg_arbiter(stream<pkgInfo>&	tx_pkgInfoFifo,
 				currWord.last = 1;
 				wordCounter = 0;
 				info.words -= PMTU_WORDS;
-				//Check if next one is READ_RSP_MIDDLE
+				// Check if next one is READ_RSP_MIDDLE
 				if (info.words > PMTU_WORDS)
 				{
 					state = FWD_STREAM_RAW;
@@ -2140,7 +2246,6 @@ void tx_pkg_arbiter(stream<pkgInfo>&	tx_pkgInfoFifo,
 				wordCounter = 0;
 			}
 			localReadData.write(currWord);
-
 		}
 		break;
 	case FWD_MEM_AETH:
@@ -2157,7 +2262,7 @@ void tx_pkg_arbiter(stream<pkgInfo>&	tx_pkgInfoFifo,
 				currWord.last = 1;
 				wordCounter = 0;
 				info.words -= PMTU_WORDS;
-				//Check if next one is READ_RSP_MIDDLE
+				// Check if next one is READ_RSP_MIDDLE
 				if (info.words > PMTU_WORDS)
 				{
 					state = FWD_MEM_RAW;
@@ -2173,7 +2278,6 @@ void tx_pkg_arbiter(stream<pkgInfo>&	tx_pkgInfoFifo,
 			std::cout << "RETH DATA FROM MEMORY: ";
 			print(std::cout, currWord);
 			std::cout << std::endl;
-
 
 			wordCounter++;
 			if (currWord.last)
@@ -2234,93 +2338,111 @@ void tx_pkg_arbiter(stream<pkgInfo>&	tx_pkgInfoFifo,
 			rawPayFifo.write(currWord);
 		}
 		break;
-	}//switch
-
+	} // switch
 }
 
 template <int WIDTH>
 void ib_transport_protocol(	//RX
-							stream<ipUdpMeta>&	s_axis_rx_meta,
-							stream<net_axis<WIDTH> >&	s_axis_rx_data,
-							//stream<net_axis<WIDTH> >&	m_axis_rx_data,
+							hls::stream<ipUdpMeta>&	s_axis_rx_meta,
+							hls::stream<net_axis<WIDTH> >&	s_axis_rx_data,
+							//hls::stream<net_axis<WIDTH> >&	m_axis_rx_data,
 							//TX
-							stream<txMeta>&		s_axis_tx_meta,
-							stream<net_axis<WIDTH> >&	s_axis_tx_data,
-							stream<ipUdpMeta>&	m_axis_tx_meta,
-							stream<net_axis<WIDTH> >&	m_axis_tx_data,
+							hls::stream<txMeta>&	s_axis_tx_meta,
+							hls::stream<net_axis<WIDTH> >&	s_axis_tx_data,
+							hls::stream<ipUdpMeta>&	m_axis_tx_meta,
+							hls::stream<net_axis<WIDTH> >&	m_axis_tx_data,
 							//Memory
-							stream<routedMemCmd>&		m_axis_mem_write_cmd,
-							stream<routedMemCmd>&		m_axis_mem_read_cmd,
-							//stream<mmStatus>&	s_axis_mem_write_status,
+							hls::stream<routedMemCmd>&		m_axis_mem_write_cmd,
+							hls::stream<routedMemCmd>&		m_axis_mem_read_cmd,
+							hls::stream<routed_net_axis<WIDTH> >&	m_axis_mem_write_data,
+							hls::stream<net_axis<WIDTH> >&	s_axis_mem_read_data,
 
-							stream<routed_net_axis<WIDTH> >&	m_axis_mem_write_data,
-							stream<net_axis<WIDTH> >&	s_axis_mem_read_data,
+							hls::stream<qpContext>&	s_axis_qp_interface,
+							hls::stream<ifConnReq>&	s_axis_qp_conn_interface,
 
-							//Interface
-							stream<qpContext>& s_axis_qp_interface,
-							stream<ifConnReq>&	s_axis_qp_conn_interface,
-
-							//Pointer chasing
+							//pointer chasing
 #if POINTER_CHASING_EN
-							stream<ptrChaseMeta>&	m_axis_rx_pcmeta,
-							stream<ptrChaseMeta>&	s_axis_tx_pcmeta,
+							hls::stream<ptrChaseMeta>&	m_axis_rx_pcmeta,
+							hls::stream<ptrChaseMeta>&	s_axis_tx_pcmeta,
 #endif
-
-							ap_uint<32>&		regInvalidPsnDropCount
-							)
+							//debug
+							ap_uint<32>&		regInvalidPsnDropCount,
+							hls::stream<ap_uint<16> >& tx_ibhconnTable_req,
+							hls::stream<connTableEntry> &tx_connTable2ibh_rsp,
+							hls::stream<rxStateReq>& rxIbh2stateTable_upd_req,
+							hls::stream<txStateReq>& txIbh2stateTable_upd_req,
+							hls::stream<ifStateReq>& qpi2stateTable_upd_req,
+							hls::stream<rxStateRsp>& stateTable2rxIbh_rsp,
+							hls::stream<stateTableEntry> &stateTable2txIbh_rsp,
+							hls::stream<stateTableEntry> &stateTable2qpi_rsp,
+							hls::stream<rxMsnReq>&rxExh2msnTable_upd_req,
+							hls::stream<ap_uint<16> > &txExh2msnTable_req,
+							hls::stream<ifMsnReq>& if2msnTable_init,
+							hls::stream<dmaState> &msnTable2rxExh_rsp,
+							hls::stream<txMsnRsp>& msnTable2txExh_rsp,
+							hls::stream<ap_uint<16> > &exh_lengthFifo,
+							hls::stream<readRequest>& rx_readRequestFifo,
+							hls::stream<event>& rx_readEvenFifo,
+							hls::stream<ackEvent>& rx_ackEventFifo,
+							hls::stream<txReadReqUpdate>& tx_readReqTable_upd,
+							hls::stream<rxReadReqUpdate>& rx_readReqTable_upd_req,
+							hls::stream<rxReadReqRsp>& rx_readReqTable_upd_rsp,
+							hls::stream<mqInsertReq<ap_uint<64> > >& tx_readReqAddr_push,
+							hls::stream<mqPopReq>& rx_readReqAddr_pop_req,
+							hls::stream<ap_uint<64> >& rx_readReqAddr_pop_rsp
+						)
 {
-#pragma HLS INLINE
+#pragma HLS INLINE off
 
+	static stream<net_axis<WIDTH> > rx_ibh2shiftFifo("rx_ibh2shiftFifo");
+	static stream<net_axis<WIDTH> > rx_shift2exhFifo("rx_shift2exhFifo");
+	static stream<net_axis<WIDTH> > rx_exh2dropFifo("rx_exh2dropFifo");
+	static stream<net_axis<WIDTH> > rx_ibhDrop2exhFifo("rx_ibhDrop2exhFifo");
+	static stream<ibhMeta> rx_ibh2fsm_MetaFifo("rx_ibh2fsm_MetaFifo");
+	static stream<ibhMeta> rx_fsm2exh_MetaFifo("rx_fsm2exh_MetaFifo");
+	static stream<routed_net_axis<WIDTH> > rx_exh2rethShiftFifo("rx_exh2rethShiftFifo");
+	static stream<net_axis<WIDTH> > rx_exh2aethShiftFifo("rx_exh2aethShiftFifo");
+	static stream<routed_net_axis<WIDTH> > rx_exhNoShiftFifo("rx_exhNoShiftFifo");
+	static stream<routed_net_axis<WIDTH> > rx_rethSift2mergerFifo("rx_rethSift2mergerFifo");
+	static stream<net_axis<WIDTH> > rx_aethSift2mergerFifo("rx_aethSift2mergerFifo");
+	static stream<pkgSplitType> rx_pkgSplitTypeFifo("rx_pkgSplitTypeFifo");
+	static stream<pkgShiftType> rx_pkgShiftTypeFifo("rx_pkgShiftTypeFifo");
+#pragma HLS STREAM depth = 2 variable = rx_ibh2shiftFifo
+#pragma HLS STREAM depth = 2 variable = rx_shift2exhFifo
+#pragma HLS STREAM depth = 32 variable = rx_exh2dropFifo
+#pragma HLS STREAM depth = 32 variable = rx_ibhDrop2exhFifo
+#pragma HLS STREAM depth = 2 variable = rx_ibh2fsm_MetaFifo
+#pragma HLS STREAM depth = 2 variable = rx_fsm2exh_MetaFifo
+#pragma HLS STREAM depth = 4 variable = rx_exh2rethShiftFifo
+#pragma HLS STREAM depth = 4 variable = rx_exh2aethShiftFifo
+#pragma HLS STREAM depth = 4 variable = rx_exhNoShiftFifo
+#pragma HLS STREAM depth = 4 variable = rx_rethSift2mergerFifo
+#pragma HLS STREAM depth = 4 variable = rx_aethSift2mergerFifo
+#pragma HLS STREAM depth = 2 variable = rx_pkgSplitTypeFifo
+#pragma HLS STREAM depth = 2 variable = rx_pkgShiftTypeFifo
+#pragma HLS DATA_PACK variable = rx_ibh2fsm_MetaFifo
+#pragma HLS DATA_PACK variable = rx_fsm2exh_MetaFifo
+#pragma HLS DATA_PACK variable = rx_pkgSplitTypeFifo
+#pragma HLS DATA_PACK variable = rx_pkgShiftTypeFifo
 
-	static stream<net_axis<WIDTH> > 			rx_ibh2shiftFifo("rx_ibh2shiftFifo");
-	static stream<net_axis<WIDTH> > 			rx_shift2exhFifo("rx_shift2exhFifo");
-	static stream<net_axis<WIDTH> > 			rx_exh2dropFifo("rx_exh2dropFifo");
-	static stream<net_axis<WIDTH> >			rx_ibhDrop2exhFifo("rx_ibhDrop2exhFifo");
-	static stream<ibhMeta> 			rx_ibh2fsm_MetaFifo("rx_ibh2fsm_MetaFifo");
-	static stream<ibhMeta>			rx_fsm2exh_MetaFifo("rx_fsm2exh_MetaFifo");
-	static stream<routed_net_axis<WIDTH> >	rx_exh2rethShiftFifo("rx_exh2rethShiftFifo");
-	static stream<net_axis<WIDTH> >			rx_exh2aethShiftFifo("rx_exh2aethShiftFifo");
-	static stream<routed_net_axis<WIDTH> >	rx_exhNoShiftFifo("rx_exhNoShiftFifo");
-	static stream<routed_net_axis<WIDTH> >	rx_rethSift2mergerFifo("rx_rethSift2mergerFifo");
-	static stream<net_axis<WIDTH> >			rx_aethSift2mergerFifo("rx_aethSift2mergerFifo");
-	static stream<pkgSplitType>		rx_pkgSplitTypeFifo("rx_pkgSplitTypeFifo");
-	static stream<pkgShiftType> 	rx_pkgShiftTypeFifo("rx_pkgShiftTypeFifo");
-	#pragma HLS STREAM depth=2 variable=rx_ibh2shiftFifo
-	#pragma HLS STREAM depth=2 variable=rx_shift2exhFifo
-	#pragma HLS STREAM depth=32 variable=rx_exh2dropFifo
-	#pragma HLS STREAM depth=32 variable=rx_ibhDrop2exhFifo
-	#pragma HLS STREAM depth=2 variable=rx_ibh2fsm_MetaFifo
-	#pragma HLS STREAM depth=2 variable=rx_fsm2exh_MetaFifo
-	#pragma HLS STREAM depth=4 variable=rx_exh2rethShiftFifo
-	#pragma HLS STREAM depth=4 variable=rx_exh2aethShiftFifo
-	#pragma HLS STREAM depth=4 variable=rx_exhNoShiftFifo
-	#pragma HLS STREAM depth=4 variable=rx_rethSift2mergerFifo
-	#pragma HLS STREAM depth=4 variable=rx_aethSift2mergerFifo
-	#pragma HLS STREAM depth=2 variable=rx_pkgSplitTypeFifo
-	#pragma HLS STREAM depth=2 variable=rx_pkgShiftTypeFifo
-	#pragma HLS DATA_PACK variable=rx_ibh2fsm_MetaFifo
-	#pragma HLS DATA_PACK variable=rx_fsm2exh_MetaFifo
-	#pragma HLS DATA_PACK variable=rx_pkgSplitTypeFifo
-	#pragma HLS DATA_PACK variable=rx_pkgShiftTypeFifo
-
-	static stream<ackEvent>  rx_ibhEventFifo("rx_ibhEventFifo"); //TODO rename
-	static stream<ackEvent>  rx_exhEventMetaFifo("rx_exhEventMetaFifo");
+	static stream<ackEvent> rx_ibhEventFifo("rx_ibhEventFifo"); // TODO rename
+	static stream<ackEvent> rx_exhEventMetaFifo("rx_exhEventMetaFifo");
 	static stream<memCmdInternal> rx_remoteMemCmd("rx_remoteMemCmd");
-	#pragma HLS STREAM depth=2 variable=rx_ibhEventFifo
-	#pragma HLS STREAM depth=2 variable=rx_exhEventMetaFifo
-	#pragma HLS STREAM depth=512 variable=rx_remoteMemCmd
-	#pragma HLS DATA_PACK variable=rx_ibhEventFifo
-	#pragma HLS DATA_PACK variable=rx_exhEventMetaFifo
-	#pragma HLS DATA_PACK variable=rx_remoteMemCmd
+#pragma HLS STREAM depth = 2 variable = rx_ibhEventFifo
+#pragma HLS STREAM depth = 2 variable = rx_exhEventMetaFifo
+#pragma HLS STREAM depth = 512 variable = rx_remoteMemCmd
+#pragma HLS DATA_PACK variable = rx_ibhEventFifo
+#pragma HLS DATA_PACK variable = rx_exhEventMetaFifo
+#pragma HLS DATA_PACK variable = rx_remoteMemCmd
 
-	static stream<ibhMeta>	tx_ibhMetaFifo("tx_ibhMetaFifo");
-	static stream<event>	tx_appMetaFifo("tx_appMetaFifo");
-	//static stream<event>	tx_localMetaFifo("tx_localMetaFifo");
-	static stream<net_axis<WIDTH> >	tx_appDataFifo("tx_appDataFifo");
-	#pragma HLS STREAM depth=8 variable=tx_ibhMetaFifo
-	#pragma HLS STREAM depth=32 variable=tx_appMetaFifo
-	//#pragma HLS STREAM depth=8 variable=tx_localMetaFifo
-	#pragma HLS STREAM depth=8 variable=tx_appDataFifo
+	static stream<ibhMeta> tx_ibhMetaFifo("tx_ibhMetaFifo");
+	static stream<event> tx_appMetaFifo("tx_appMetaFifo");
+	// static stream<event>	tx_localMetaFifo("tx_localMetaFifo");
+	static stream<net_axis<WIDTH> > tx_appDataFifo("tx_appDataFifo");
+#pragma HLS STREAM depth = 8 variable = tx_ibhMetaFifo
+#pragma HLS STREAM depth = 32 variable = tx_appMetaFifo
+// #pragma HLS STREAM depth=8 variable=tx_localMetaFifo
+#pragma HLS STREAM depth = 8 variable = tx_appDataFifo
 
 	static stream<event> tx_exhMetaFifo("tx_exhMetaFifo");
 	static stream<net_axis<WIDTH> > tx_exh2shiftFifo("tx_exh2shiftFifo");
@@ -2330,111 +2452,110 @@ void ib_transport_protocol(	//RX
 	static stream<net_axis<WIDTH> > tx_rawPayFifo("tx_rawPayFifo");
 	static stream<net_axis<WIDTH> > tx_exh2payFifo("tx_exh2payFifo");
 	static stream<BaseTransportHeader<WIDTH> > tx_ibhHeaderFifo("tx_ibhHeaderFifo");
-	static stream<memCmdInternal>  tx_localMemCmdFifo("tx_localMemCmdFifo");
-	#pragma HLS STREAM depth=4 variable=tx_exhMetaFifo
-	#pragma HLS STREAM depth=2 variable=tx_exh2shiftFifo
-	#pragma HLS STREAM depth=8 variable=tx_shift2ibhFifo
-	#pragma HLS STREAM depth=2 variable=tx_aethShift2payFifo
-	#pragma HLS STREAM depth=2 variable=tx_rethShift2payFifo
-	#pragma HLS STREAM depth=4 variable=tx_rawPayFifo
-	#pragma HLS STREAM depth=4 variable=tx_exh2payFifo
-	#pragma HLS STREAM depth=2 variable=tx_ibhHeaderFifo
-	#pragma HLS STREAM depth=2 variable=tx_localMemCmdFifo
-	#pragma HLS DATA_PACK variable=tx_exhMetaFifo
-	#pragma HLS DATA_PACK variable=tx_ibhHeaderFifo
-	#pragma HLS DATA_PACK variable=tx_localMemCmdFifo
+	static stream<memCmdInternal> tx_localMemCmdFifo("tx_localMemCmdFifo");
+#pragma HLS STREAM depth = 4 variable = tx_exhMetaFifo
+#pragma HLS STREAM depth = 2 variable = tx_exh2shiftFifo
+#pragma HLS STREAM depth = 8 variable = tx_shift2ibhFifo
+#pragma HLS STREAM depth = 2 variable = tx_aethShift2payFifo
+#pragma HLS STREAM depth = 2 variable = tx_rethShift2payFifo
+#pragma HLS STREAM depth = 4 variable = tx_rawPayFifo
+#pragma HLS STREAM depth = 4 variable = tx_exh2payFifo
+#pragma HLS STREAM depth = 2 variable = tx_ibhHeaderFifo
+#pragma HLS STREAM depth = 2 variable = tx_localMemCmdFifo
+#pragma HLS DATA_PACK variable = tx_exhMetaFifo
+#pragma HLS DATA_PACK variable = tx_ibhHeaderFifo
+#pragma HLS DATA_PACK variable = tx_localMemCmdFifo
 
-	static stream<txPacketInfo>	tx_packetInfoFifo("tx_packetInfoFifo");
+	static stream<txPacketInfo> tx_packetInfoFifo("tx_packetInfoFifo");
 	static stream<ap_uint<16> > tx_lengthFifo("tx_lengthFifo");
-	#pragma HLS STREAM depth=2 variable=tx_packetInfoFifo
-	#pragma HLS STREAM depth=4 variable=tx_lengthFifo
-	#pragma HLS DATA_PACK variable=tx_packetInfoFifo
+#pragma HLS STREAM depth = 2 variable = tx_packetInfoFifo
+#pragma HLS STREAM depth = 4 variable = tx_lengthFifo
+#pragma HLS DATA_PACK variable = tx_packetInfoFifo
 
 	static stream<bool> rx_ibhDropFifo("rx_ibhDropFifo");
 	static stream<fwdPolicy> rx_ibhDropMetaFifo("rx_ibhDropMetaFifo");
-	#pragma HLS STREAM depth=2 variable=rx_ibhDropFifo
-	#pragma HLS STREAM depth=2 variable=rx_ibhDropMetaFifo
-	#pragma HLS DATA_PACK variable=rx_ibhDropMetaFifo
+#pragma HLS STREAM depth = 2 variable = rx_ibhDropFifo
+#pragma HLS STREAM depth = 2 variable = rx_ibhDropMetaFifo
+#pragma HLS DATA_PACK variable = rx_ibhDropMetaFifo
 
-	//Connection Table
-	static stream<ap_uint<16> >	tx_ibhconnTable_req("tx_ibhconnTable_req");
-	//static stream<ifConnReq>		qpi2connTable_req("qpi2connTable_req");
-	static stream<connTableEntry>	tx_connTable2ibh_rsp("tx_connTable2ibh_rsp");
-	//static stream<connTableEntry> connTable2qpi_rsp("connTable2qpi_rsp");
-	#pragma HLS STREAM depth=2 variable=tx_ibhconnTable_req
-	#pragma HLS STREAM depth=8 variable=tx_connTable2ibh_rsp
-	#pragma HLS DATA_PACK variable=tx_connTable2qpi_rsp
+// 	// Connection Table
+// 	static stream<ap_uint<16> > tx_ibhconnTable_req("tx_ibhconnTable_req");
+// 	// static stream<ifConnReq>		qpi2connTable_req("qpi2connTable_req");
+// 	static stream<connTableEntry> tx_connTable2ibh_rsp("tx_connTable2ibh_rsp");
+// // static stream<connTableEntry> connTable2qpi_rsp("connTable2qpi_rsp");
+// #pragma HLS STREAM depth = 2 variable = tx_ibhconnTable_req
+// #pragma HLS STREAM depth = 8 variable = tx_connTable2ibh_rsp
+// #pragma HLS DATA_PACK variable = tx_connTable2qpi_rsp
 
-	//State Table Fifos
-	static stream<rxStateReq> rxIbh2stateTable_upd_req("rxIbh2stateTable_upd_req");
-	static stream<txStateReq> txIbh2stateTable_upd_req("txIbh2stateTable_upd_req");
-	static stream<ifStateReq> qpi2stateTable_upd_req("qpi2stateTable_upd_req");
-	static stream<rxStateRsp> stateTable2rxIbh_rsp("stateTable2rxIbh_rsp");
-	static stream<stateTableEntry> stateTable2txIbh_rsp("stateTable2txIbh_rsp");
-	static stream<stateTableEntry> stateTable2qpi_rsp("stateTable2qpi_rsp");
-	#pragma HLS STREAM depth=2 variable=rxIbh2stateTable_upd_req
-	#pragma HLS STREAM depth=2 variable=txIbh2stateTable_upd_req
-	#pragma HLS STREAM depth=2 variable=qpi2stateTable_upd_req
-	#pragma HLS STREAM depth=2 variable=stateTable2rxIbh_rsp
-	#pragma HLS STREAM depth=2 variable=stateTable2txIbh_rsp
-	#pragma HLS STREAM depth=2 variable=stateTable2qpi_rsp
-	#pragma HLS DATA_PACK variable=rxIbh2stateTable_upd_req
-	#pragma HLS DATA_PACK variable=txIbh2stateTable_upd_req
-	#pragma HLS DATA_PACK variable=qpi2stateTable_upd_req
-	#pragma HLS DATA_PACK variable=stateTable2rxIbh_rsp
-	#pragma HLS DATA_PACK variable=stateTable2txIbh_rsp
-	#pragma HLS DATA_PACK variable=stateTable2qpi_rsp
+// 	// State Table Fifos
+// 	static stream<rxStateReq> rxIbh2stateTable_upd_req("rxIbh2stateTable_upd_req");
+// 	static stream<txStateReq> txIbh2stateTable_upd_req("txIbh2stateTable_upd_req");
+// 	static stream<ifStateReq> qpi2stateTable_upd_req("qpi2stateTable_upd_req");
+// 	static stream<rxStateRsp> stateTable2rxIbh_rsp("stateTable2rxIbh_rsp");
+// 	static stream<stateTableEntry> stateTable2txIbh_rsp("stateTable2txIbh_rsp");
+// 	static stream<stateTableEntry> stateTable2qpi_rsp("stateTable2qpi_rsp");
+// #pragma HLS STREAM depth = 2 variable = rxIbh2stateTable_upd_req
+// #pragma HLS STREAM depth = 2 variable = txIbh2stateTable_upd_req
+// #pragma HLS STREAM depth = 2 variable = qpi2stateTable_upd_req
+// #pragma HLS STREAM depth = 2 variable = stateTable2rxIbh_rsp
+// #pragma HLS STREAM depth = 2 variable = stateTable2txIbh_rsp
+// #pragma HLS STREAM depth = 2 variable = stateTable2qpi_rsp
+// #pragma HLS DATA_PACK variable = rxIbh2stateTable_upd_req
+// #pragma HLS DATA_PACK variable = txIbh2stateTable_upd_req
+// #pragma HLS DATA_PACK variable = qpi2stateTable_upd_req
+// #pragma HLS DATA_PACK variable = stateTable2rxIbh_rsp
+// #pragma HLS DATA_PACK variable = stateTable2txIbh_rsp
+// #pragma HLS DATA_PACK variable = stateTable2qpi_rsp
 
-	// MSN Table
-	static stream<rxMsnReq>		rxExh2msnTable_upd_req("rxExh2msnTable_upd_req");
-	static stream<ap_uint<16> >	txExh2msnTable_req("txExh2msnTable_req");
-	static stream<ifMsnReq>	if2msnTable_init("if2msnTable_init");
-	static stream<dmaState>	msnTable2rxExh_rsp("msnTable2rxExh_rsp");
-	static stream<txMsnRsp>	msnTable2txExh_rsp("msnTable2txExh_rsp");
-	#pragma HLS STREAM depth=2 variable=rxExh2msnTable_upd_req
-	#pragma HLS STREAM depth=2 variable=txExh2msnTable_req
-	#pragma HLS STREAM depth=2 variable=if2msnTable_init
-	#pragma HLS STREAM depth=2 variable=msnTable2rxExh_rsp
-	#pragma HLS STREAM depth=2 variable=msnTable2txExh_rsp
-	#pragma HLS DATA_PACK variable=rxExh2msnTable_upd_req
-	#pragma HLS DATA_PACK variable=if2msnTable_init
-	#pragma HLS DATA_PACK variable=msnTable2rxExh_rsp
-	#pragma HLS DATA_PACK variable=msnTable2txExh_rsp
+// 	// MSN Table
+// 	static stream<rxMsnReq> rxExh2msnTable_upd_req("rxExh2msnTable_upd_req");
+// 	static stream<ap_uint<16> > txExh2msnTable_req("txExh2msnTable_req");
+// 	static stream<ifMsnReq> if2msnTable_init("if2msnTable_init");
+// 	static stream<dmaState> msnTable2rxExh_rsp("msnTable2rxExh_rsp");
+// 	static stream<txMsnRsp> msnTable2txExh_rsp("msnTable2txExh_rsp");
+// #pragma HLS STREAM depth = 2 variable = rxExh2msnTable_upd_req
+// #pragma HLS STREAM depth = 2 variable = txExh2msnTable_req
+// #pragma HLS STREAM depth = 2 variable = if2msnTable_init
+// #pragma HLS STREAM depth = 2 variable = msnTable2rxExh_rsp
+// #pragma HLS STREAM depth = 2 variable = msnTable2txExh_rsp
+// #pragma HLS DATA_PACK variable = rxExh2msnTable_upd_req
+// #pragma HLS DATA_PACK variable = if2msnTable_init
+// #pragma HLS DATA_PACK variable = msnTable2rxExh_rsp
+// #pragma HLS DATA_PACK variable = msnTable2txExh_rsp
 
-	static stream<ap_uint<16> > exh_lengthFifo("exh_lengthFifo");
-	static stream<readRequest>	rx_readRequestFifo("rx_readRequestFifo");
-	static stream<event>		rx_readEvenFifo("rx_readEvenFifo");
-	static stream<ackEvent>		rx_ackEventFifo("rx_ackEventFifo");
-	#pragma HLS STREAM depth=4 variable=exh_lengthFifo
-	#pragma HLS STREAM depth=8 variable=rx_readRequestFifo
-	#pragma HLS STREAM depth=512 variable=rx_readEvenFifo
-	#pragma HLS STREAM depth=4 variable=rx_ackEventFifo
-	#pragma HLS DATA_PACK variable=rx_readRequestFifo
-	#pragma HLS DATA_PACK variable=rx_readEvenFifo
-	#pragma HLS DATA_PACK variable=rx_ackEventFifo
+// 	static stream<ap_uint<16> > exh_lengthFifo("exh_lengthFifo");
+// 	static stream<readRequest> rx_readRequestFifo("rx_readRequestFifo");
+// 	static stream<event> rx_readEvenFifo("rx_readEvenFifo");
+// 	static stream<ackEvent> rx_ackEventFifo("rx_ackEventFifo");
+// #pragma HLS STREAM depth = 4 variable = exh_lengthFifo
+// #pragma HLS STREAM depth = 8 variable = rx_readRequestFifo
+// #pragma HLS STREAM depth = 512 variable = rx_readEvenFifo
+// #pragma HLS STREAM depth = 4 variable = rx_ackEventFifo
+// #pragma HLS DATA_PACK variable = rx_readRequestFifo
+// #pragma HLS DATA_PACK variable = rx_readEvenFifo
+// #pragma HLS DATA_PACK variable = rx_ackEventFifo
 
-	// Read Req Table
-	static stream<txReadReqUpdate>	tx_readReqTable_upd("tx_readReqTable_upd");
-	static stream<rxReadReqUpdate>	rx_readReqTable_upd_req("rx_readReqTable_upd_req");
-	static stream<rxReadReqRsp>		rx_readReqTable_upd_rsp("rx_readReqTable_upd_rsp");
-	#pragma HLS STREAM depth=2 variable=tx_readReqTable_upd
-	#pragma HLS STREAM depth=2 variable=rx_readReqTable_upd_req
-	#pragma HLS STREAM depth=2 variable=rx_readReqTable_upd_rsp
-	#pragma HLS DATA_PACK variable=tx_readReqTable_upd
-	#pragma HLS DATA_PACK variable=rx_readReqTable_upd_req
-	#pragma HLS DATA_PACK variable=rx_readReqTable_upd_rsp
+// 	// Read Req Table
+// 	static stream<txReadReqUpdate> tx_readReqTable_upd("tx_readReqTable_upd");
+// 	static stream<rxReadReqUpdate> rx_readReqTable_upd_req("rx_readReqTable_upd_req");
+// 	static stream<rxReadReqRsp> rx_readReqTable_upd_rsp("rx_readReqTable_upd_rsp");
+// #pragma HLS STREAM depth = 2 variable = tx_readReqTable_upd
+// #pragma HLS STREAM depth = 2 variable = rx_readReqTable_upd_req
+// #pragma HLS STREAM depth = 2 variable = rx_readReqTable_upd_rsp
+// #pragma HLS DATA_PACK variable = tx_readReqTable_upd
+// #pragma HLS DATA_PACK variable = rx_readReqTable_upd_req
+// #pragma HLS DATA_PACK variable = rx_readReqTable_upd_rsp
 
-	// Outstanding Read Req Table
-	//TODO merge these two
-	static stream<mqInsertReq<ap_uint<64> > >	tx_readReqAddr_push("tx_readReqAddr_push");
-	static stream<mqPopReq> rx_readReqAddr_pop_req("rx_readReqAddr_pop_req");
-	static stream<ap_uint<64> > rx_readReqAddr_pop_rsp("rx_readReqAddr_pop_rsp");
-	#pragma HLS STREAM depth=2 variable=tx_readReqAddr_push
-	#pragma HLS STREAM depth=2 variable=rx_readReqAddr_pop_req
-	#pragma HLS STREAM depth=2 variable=rx_readReqAddr_pop_rsp
-	#pragma HLS DATA_PACK variable=rx_readReqAddr_pop_req
-	#pragma HLS DATA_PACK variable=rx_readReqAddr_pop_rsp
-
+// 	// Outstanding Read Req Table
+// 	// TODO merge these two
+// 	static stream<mqInsertReq<ap_uint<64> > > tx_readReqAddr_push("tx_readReqAddr_push");
+// 	static stream<mqPopReq> rx_readReqAddr_pop_req("rx_readReqAddr_pop_req");
+// 	static stream<ap_uint<64> > rx_readReqAddr_pop_rsp("rx_readReqAddr_pop_rsp");
+// #pragma HLS STREAM depth = 2 variable = tx_readReqAddr_push
+// #pragma HLS STREAM depth = 2 variable = rx_readReqAddr_pop_req
+// #pragma HLS STREAM depth = 2 variable = rx_readReqAddr_pop_rsp
+// #pragma HLS DATA_PACK variable = rx_readReqAddr_pop_req
+// #pragma HLS DATA_PACK variable = rx_readReqAddr_pop_rsp
 
 	/*
 	 * TIMER & RETRANSMITTER
@@ -2442,31 +2563,30 @@ void ib_transport_protocol(	//RX
 #if RETRANS_EN
 	static stream<rxTimerUpdate> rxClearTimer_req("rxClearTimer_req");
 	static stream<ap_uint<24> > txSetTimer_req("txSetTimer_req");
-	static stream<retransRelease>	rx2retrans_release_upd("rx2retrans_release_upd");
+	static stream<retransRelease> rx2retrans_release_upd("rx2retrans_release_upd");
 	static stream<retransmission> rx2retrans_req("rx2retrans_req");
 	static stream<retransmission> timer2retrans_req("timer2retrans_req");
-	static stream<retransMeta>		tx2retrans_insertMeta("tx2retrans_insertMeta");
-	static stream<retransAddrLen>	tx2retrans_insertAddrLen("tx2retrans_insertAddrLen");
-	static stream<retransEntry>		tx2retrans_insertRequest("tx2retrans_insertRequest");
-	static stream<retransEvent> 	retransmitter2exh_eventFifo("retransmitter2exh_eventFifo");
-	#pragma HLS STREAM depth=2 variable=rxClearTimer_req
-	#pragma HLS STREAM depth=2 variable=txSetTimer_req
-	#pragma HLS STREAM depth=2 variable=rx2retrans_release_upd
-	#pragma HLS STREAM depth=2 variable=rx2retrans_req
-	#pragma HLS STREAM depth=2 variable=timer2retrans_req
-	#pragma HLS STREAM depth=2 variable=tx2retrans_insertMeta
-	#pragma HLS STREAM depth=8 variable=tx2retrans_insertAddrLen
-	#pragma HLS STREAM depth=2 variable=tx2retrans_insertRequest
-	#pragma HLS STREAM depth=8 variable=retransmitter2exh_eventFifo
+	static stream<retransMeta> tx2retrans_insertMeta("tx2retrans_insertMeta");
+	static stream<retransAddrLen> tx2retrans_insertAddrLen("tx2retrans_insertAddrLen");
+	static stream<retransEntry> tx2retrans_insertRequest("tx2retrans_insertRequest");
+	static stream<retransEvent> retransmitter2exh_eventFifo("retransmitter2exh_eventFifo");
+#pragma HLS STREAM depth = 2 variable = rxClearTimer_req
+#pragma HLS STREAM depth = 2 variable = txSetTimer_req
+#pragma HLS STREAM depth = 2 variable = rx2retrans_release_upd
+#pragma HLS STREAM depth = 2 variable = rx2retrans_req
+#pragma HLS STREAM depth = 2 variable = timer2retrans_req
+#pragma HLS STREAM depth = 2 variable = tx2retrans_insertMeta
+#pragma HLS STREAM depth = 8 variable = tx2retrans_insertAddrLen
+#pragma HLS STREAM depth = 2 variable = tx2retrans_insertRequest
+#pragma HLS STREAM depth = 8 variable = retransmitter2exh_eventFifo
 #endif
 
-	//TODO this is a hack
+	// TODO this is a hack
 	static stream<ap_uint<24> > tx_dstQpFifo("tx_dstQpFifo");
-	#pragma HLS STREAM depth=2 variable=tx_dstQpFifo
+#pragma HLS STREAM depth = 2 variable = tx_dstQpFifo
 
-	// Interface
-	qp_interface(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init);
-
+	// // Interface
+	// qp_interface(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init);
 
 	/*
 	 * RX PATH
@@ -2474,271 +2594,288 @@ void ib_transport_protocol(	//RX
 	static stream<ibOpCode> rx_ibh2exh_MetaFifo("rx_ibh2exh_MetaFifo");
 	static stream<ExHeader<WIDTH> > rx_exh2drop_MetaFifo("rx_exh2drop_MetaFifo");
 	static stream<ExHeader<WIDTH> > rx_drop2exhFsm_MetaFifo("rx_drop2exhFsm_MetaFifo");
-	static stream<exhMeta>	rx_exhMetaFifo("rx_exhMetaFifo");
-	#pragma HLS STREAM depth=2 variable=rx_ibh2exh_MetaFifo
-	#pragma HLS STREAM depth=8 variable=rx_exh2drop_MetaFifo
-	#pragma HLS STREAM depth=2 variable=rx_drop2exhFsm_MetaFifo
-	#pragma HLS STREAM depth=2 variable=rx_exhMetaFifo
-	#pragma HLS DATA_PACK variable=rx_ibh2exh_MetaFifo
-	#pragma HLS DATA_PACK variable=rx_exh2drop_MetaFifo
-	#pragma HLS DATA_PACK variable=rx_drop2exhFsm_MetaFifo
-	#pragma HLS DATA_PACK variable=rx_exhMetaFifo
+	static stream<exhMeta> rx_exhMetaFifo("rx_exhMetaFifo");
+#pragma HLS STREAM depth = 2 variable = rx_ibh2exh_MetaFifo
+#pragma HLS STREAM depth = 8 variable = rx_exh2drop_MetaFifo
+#pragma HLS STREAM depth = 2 variable = rx_drop2exhFsm_MetaFifo
+#pragma HLS STREAM depth = 2 variable = rx_exhMetaFifo
+#pragma HLS DATA_PACK variable = rx_ibh2exh_MetaFifo
+#pragma HLS DATA_PACK variable = rx_exh2drop_MetaFifo
+#pragma HLS DATA_PACK variable = rx_drop2exhFsm_MetaFifo
+#pragma HLS DATA_PACK variable = rx_exhMetaFifo
 
-	rx_process_ibh(s_axis_rx_data, rx_ibh2fsm_MetaFifo,rx_ibh2exh_MetaFifo, rx_ibh2shiftFifo);
+	rx_process_ibh(s_axis_rx_data, rx_ibh2fsm_MetaFifo, rx_ibh2exh_MetaFifo, rx_ibh2shiftFifo);
 
-	rshiftWordByOctet<net_axis<WIDTH>, WIDTH,11>(((BTH_SIZE%WIDTH)/8), rx_ibh2shiftFifo, rx_shift2exhFifo);
+	rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 11>(((BTH_SIZE % WIDTH) / 8), rx_ibh2shiftFifo, rx_shift2exhFifo);
 
-	rx_process_exh(	rx_shift2exhFifo,
-					rx_ibh2exh_MetaFifo,
-					rx_exhMetaFifo,
-					rx_exh2drop_MetaFifo, //TODO check if this has to be dropped
-					rx_exh2dropFifo);
+	rx_process_exh(rx_shift2exhFifo,
+				   rx_ibh2exh_MetaFifo,
+				   rx_exhMetaFifo,
+				   rx_exh2drop_MetaFifo, // TODO check if this has to be dropped
+				   rx_exh2dropFifo);
 
-
-	rx_ibh_fsm(	rx_ibh2fsm_MetaFifo,
-				rx_exhMetaFifo,
-				stateTable2rxIbh_rsp,
-				rxIbh2stateTable_upd_req,
-				rx_fsm2exh_MetaFifo,
-				rx_ibhEventFifo,
-				rx_ibhDropFifo,
-				rx_ibhDropMetaFifo,
+	rx_ibh_fsm(rx_ibh2fsm_MetaFifo,
+			   rx_exhMetaFifo,
+			   stateTable2rxIbh_rsp,
+			   rxIbh2stateTable_upd_req,
+			   rx_fsm2exh_MetaFifo,
+			   rx_ibhEventFifo,
+			   rx_ibhDropFifo,
+			   rx_ibhDropMetaFifo,
 #if RETRANS_EN
-				rxClearTimer_req,
-				rx2retrans_release_upd,
+			   rxClearTimer_req,
+			   rx2retrans_release_upd,
 #endif
-				regInvalidPsnDropCount);
+			   regInvalidPsnDropCount);
 
 	drop_ooo_ibh(rx_exh2dropFifo, rx_ibhDropFifo, rx_ibhDrop2exhFifo);
 
-	//some hack TODO, make this nicer.. not sure what this is still for
+	// some hack TODO, make this nicer.. not sure what this is still for
 	ipUdpMetaHandler(s_axis_rx_meta, rx_exh2drop_MetaFifo, rx_ibhDropMetaFifo, exh_lengthFifo, rx_drop2exhFsm_MetaFifo);
 
-	rx_exh_fsm(	rx_fsm2exh_MetaFifo,
-				exh_lengthFifo,
-				msnTable2rxExh_rsp,
+	rx_exh_fsm(rx_fsm2exh_MetaFifo,
+			   exh_lengthFifo,
+			   msnTable2rxExh_rsp,
 #if RETRANS_EN
-				rx_readReqTable_upd_rsp,
+			   rx_readReqTable_upd_rsp,
 #endif
-				rx_readReqAddr_pop_rsp,
-				rx_drop2exhFsm_MetaFifo,
-				//rx_ibhDrop2exhFifo,
-				m_axis_mem_write_cmd,
-				rx_readRequestFifo,
+			   rx_readReqAddr_pop_rsp,
+			   rx_drop2exhFsm_MetaFifo,
+			   // rx_ibhDrop2exhFifo,
+			   m_axis_mem_write_cmd,
+			   rx_readRequestFifo,
 #if POINTER_CHASING_EN
-				m_axis_rx_pcmeta,
+			   m_axis_rx_pcmeta,
 #endif
-				rxExh2msnTable_upd_req,
-				rx_readReqTable_upd_req,
-				rx_readReqAddr_pop_req,
-				rx_exhEventMetaFifo,
+			   rxExh2msnTable_upd_req,
+			   rx_readReqTable_upd_req,
+			   rx_readReqAddr_pop_req,
+			   rx_exhEventMetaFifo,
 #if RETRANS_EN
 
-				rx2retrans_req,
+			   rx2retrans_req,
 #endif
-				//rx_rethSift2mergerFifo,
-				//rx_exh2aethShiftFifo,
-				//rx_exhNoShiftFifo,
-				rx_pkgSplitTypeFifo,
-				rx_pkgShiftTypeFifo);
+			   // rx_rethSift2mergerFifo,
+			   // rx_exh2aethShiftFifo,
+			   // rx_exhNoShiftFifo,
+			   rx_pkgSplitTypeFifo,
+			   rx_pkgShiftTypeFifo);
 
-	rx_exh_payload(	rx_pkgSplitTypeFifo,
-					rx_ibhDrop2exhFifo,
-//#if AXI_WIDTH == 64
-//					rx_rethSift2mergerFifo,
-//#else
-					rx_exh2rethShiftFifo,
-//#endif
-					rx_exh2aethShiftFifo,
-					rx_exhNoShiftFifo);
+	rx_exh_payload(rx_pkgSplitTypeFifo,
+				   rx_ibhDrop2exhFifo,
+				   // #if AXI_WIDTH == 64
+				   //					rx_rethSift2mergerFifo,
+				   // #else
+				   rx_exh2rethShiftFifo,
+				   // #endif
+				   rx_exh2aethShiftFifo,
+				   rx_exhNoShiftFifo);
 
-	handle_read_requests(	rx_readRequestFifo,
-							rx_remoteMemCmd,
-							rx_readEvenFifo);
+	handle_read_requests(rx_readRequestFifo,
+						 rx_remoteMemCmd,
+						 rx_readEvenFifo);
 
-	//TODO is order important??
+	// TODO is order important??
 	stream_merger<ackEvent>(rx_exhEventMetaFifo, rx_ibhEventFifo, rx_ackEventFifo);
 
 	// RETH: 16 bytes
-	//TODO not required for AXI_WIDTH == 64, also this seems to have a bug, this goes together with the hack in process_exh where we don't write the first word out
-//#if AXI_WIDTH != 64
-	rshiftWordByOctet<routed_net_axis<WIDTH>, WIDTH,12>(((RETH_SIZE%WIDTH)/8), rx_exh2rethShiftFifo, rx_rethSift2mergerFifo);
-//#endif
-	// AETH: 4 bytes
-	rshiftWordByOctet<net_axis<WIDTH>, WIDTH,13>(((AETH_SIZE%WIDTH)/8), rx_exh2aethShiftFifo, rx_aethSift2mergerFifo);
+	// TODO not required for AXI_WIDTH == 64, also this seems to have a bug, this goes together with the hack in process_exh where we don't write the first word out
+	// #if AXI_WIDTH != 64
+	rshiftWordByOctet<routed_net_axis<WIDTH>, WIDTH, 12>(((RETH_SIZE % WIDTH) / 8), rx_exh2rethShiftFifo, rx_rethSift2mergerFifo);
+	// #endif
+	//  AETH: 4 bytes
+	rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 13>(((AETH_SIZE % WIDTH) / 8), rx_exh2aethShiftFifo, rx_aethSift2mergerFifo);
 
 	merge_rx_pkgs(rx_pkgShiftTypeFifo, rx_aethSift2mergerFifo, rx_rethSift2mergerFifo, rx_exhNoShiftFifo, m_axis_mem_write_data);
-
-
 
 	/*
 	 * TX PATH
 	 */
 
-	//application request handler
+	// application request handler
 	static stream<pkgInfo> tx_pkgInfoFifo("tx_pkgInfoFifo");
-	//static stream<net_axis<WIDTH> > tx_readDataFifo("tx_readDataFifo");
+	// static stream<net_axis<WIDTH> > tx_readDataFifo("tx_readDataFifo");
 	static stream<net_axis<WIDTH> > tx_split2aethShift("tx_split2aethShift");
 	static stream<net_axis<WIDTH> > tx_split2rethMerge("tx_split2rethMerge");
 	static stream<net_axis<WIDTH> > tx_rethMerge2rethShift("tx_rethMerge2rethShift");
-	#pragma HLS STREAM depth=128 variable=tx_pkgInfoFifo
-	//#pragma HLS STREAM depth=4 variable=tx_readDataFifo
-	#pragma HLS STREAM depth=4 variable=tx_split2aethShift
-	#pragma HLS STREAM depth=4 variable=tx_split2rethMerge
-	#pragma HLS STREAM depth=4 variable=tx_rethMerge2rethShift
+#pragma HLS STREAM depth = 128 variable = tx_pkgInfoFifo
+// #pragma HLS STREAM depth=4 variable=tx_readDataFifo
+#pragma HLS STREAM depth = 4 variable = tx_split2aethShift
+#pragma HLS STREAM depth = 4 variable = tx_split2rethMerge
+#pragma HLS STREAM depth = 4 variable = tx_rethMerge2rethShift
 
-	local_req_handler(	s_axis_tx_meta,
+	local_req_handler(s_axis_tx_meta,
 #if RETRANS_EN
-						retransmitter2exh_eventFifo,
+					  retransmitter2exh_eventFifo,
 #endif
-						tx_localMemCmdFifo,
-						tx_readReqAddr_push,
+					  tx_localMemCmdFifo,
+					  tx_readReqAddr_push,
 #if !RETRANS_EN
-						tx_appMetaFifo);
+					  tx_appMetaFifo);
 #else
-						tx_appMetaFifo,
-						tx2retrans_insertAddrLen);
+					  tx_appMetaFifo,
+					  tx2retrans_insertAddrLen);
 #endif
 
-
-	//Only used when FPGA does standalon, currently disabled
+	// Only used when FPGA does standalon, currently disabled
 #ifdef FPGA_STANDALONE
 	fpga_data_handler(s_axis_tx_data, tx_appDataFifo);
 #endif
 
-	tx_pkg_arbiter(	tx_pkgInfoFifo,
-					s_axis_tx_data,
-					s_axis_mem_read_data,
-					tx_split2aethShift,
+	tx_pkg_arbiter(tx_pkgInfoFifo,
+				   s_axis_tx_data,
+				   s_axis_mem_read_data,
+				   tx_split2aethShift,
 #ifdef FPGA_STANDALONE
-					tx_split2rethMerge);
+				   tx_split2rethMerge);
 #else
-					tx_rethMerge2rethShift,
+				   tx_rethMerge2rethShift,
 #endif
 					tx_rawPayFifo);
 
 #ifdef FPGA_STANDALONE
-	stream_merger(tx_split2rethMerge, tx_appDataFifo, tx_rethMerge2rethShift);
+					stream_merger(tx_split2rethMerge, tx_appDataFifo, tx_rethMerge2rethShift);
 #endif
-	//merges and orders event going to TX path
-	meta_merger(rx_ackEventFifo, rx_readEvenFifo, tx_appMetaFifo, tx_ibhconnTable_req, tx_ibhMetaFifo, tx_exhMetaFifo);
+					// merges and orders event going to TX path
+					meta_merger(rx_ackEventFifo, rx_readEvenFifo, tx_appMetaFifo, tx_ibhconnTable_req, tx_ibhMetaFifo, tx_exhMetaFifo);
 
-	//Shift playload by 4 bytes for AETH (data from memory)
-	lshiftWordByOctet<WIDTH,12>(((AETH_SIZE%WIDTH)/8), tx_split2aethShift, tx_aethShift2payFifo);
-	//Shift payload another 12 bytes for RETH (data from application)
-	lshiftWordByOctet<WIDTH,13>(((RETH_SIZE%WIDTH)/8), tx_rethMerge2rethShift, tx_rethShift2payFifo);
+					// Shift playload by 4 bytes for AETH (data from memory)
+					lshiftWordByOctet<WIDTH, 12>(((AETH_SIZE % WIDTH) / 8), tx_split2aethShift, tx_aethShift2payFifo);
+					// Shift payload another 12 bytes for RETH (data from application)
+					lshiftWordByOctet<WIDTH, 13>(((RETH_SIZE % WIDTH) / 8), tx_rethMerge2rethShift, tx_rethShift2payFifo);
 
-	//Generate EXH
-	generate_exh(	tx_exhMetaFifo,
+					// Generate EXH
+					generate_exh(tx_exhMetaFifo,
 #if POINTER_CHASING_EN
-					s_axis_tx_pcmeta,
+								 s_axis_tx_pcmeta,
 #endif
-					msnTable2txExh_rsp,
-					txExh2msnTable_req,
-					tx_readReqTable_upd,
-					tx_lengthFifo,
-					tx_packetInfoFifo,
+								 msnTable2txExh_rsp,
+								 txExh2msnTable_req,
+								 tx_readReqTable_upd,
+								 tx_lengthFifo,
+								 tx_packetInfoFifo,
 #if RETRANS_EN
-					txSetTimer_req,
+								 txSetTimer_req,
 #endif
-					tx_exh2payFifo);
-	// Append payload to AETH or RETH
-	append_payload(tx_packetInfoFifo, tx_exh2payFifo, tx_aethShift2payFifo, tx_rethShift2payFifo, tx_rawPayFifo, tx_exh2shiftFifo);
+								 tx_exh2payFifo);
+					// Append payload to AETH or RETH
+					append_payload(tx_packetInfoFifo, tx_exh2payFifo, tx_aethShift2payFifo, tx_rethShift2payFifo, tx_rawPayFifo, tx_exh2shiftFifo);
 
-	// BTH: 12 bytes
-	lshiftWordByOctet<WIDTH,11>(((BTH_SIZE%WIDTH)/8), tx_exh2shiftFifo, tx_shift2ibhFifo);
-	generate_ibh(	tx_ibhMetaFifo,
-					tx_dstQpFifo,
-					stateTable2txIbh_rsp,
-					txIbh2stateTable_upd_req,
+					// BTH: 12 bytes
+					lshiftWordByOctet<WIDTH, 11>(((BTH_SIZE % WIDTH) / 8), tx_exh2shiftFifo, tx_shift2ibhFifo);
+					generate_ibh(tx_ibhMetaFifo,
+								 tx_dstQpFifo,
+								 stateTable2txIbh_rsp,
+								 txIbh2stateTable_upd_req,
 #if RETRANS_EN
-					tx2retrans_insertMeta,
+								 tx2retrans_insertMeta,
 #endif
-					tx_ibhHeaderFifo);
+								 tx_ibhHeaderFifo);
 
-	//prependt ib header
-	prepend_ibh_header(tx_ibhHeaderFifo, tx_shift2ibhFifo, m_axis_tx_data);
+					// prependt ib header
+					prepend_ibh_header(tx_ibhHeaderFifo, tx_shift2ibhFifo, m_axis_tx_data);
 
-	//Get Meta data for UDP & IP layer
-	tx_ipUdpMetaMerger(tx_connTable2ibh_rsp, tx_lengthFifo, m_axis_tx_meta, tx_dstQpFifo);
+					// Get Meta data for UDP & IP layer
+					tx_ipUdpMetaMerger(tx_connTable2ibh_rsp, tx_lengthFifo, m_axis_tx_meta, tx_dstQpFifo);
 
+					// merge read requests
+					mem_cmd_merger<WIDTH>(rx_remoteMemCmd, tx_localMemCmdFifo, m_axis_mem_read_cmd, tx_pkgInfoFifo);
 
-	//merge read requests
-	mem_cmd_merger<WIDTH>(rx_remoteMemCmd, tx_localMemCmdFifo, m_axis_mem_read_cmd, tx_pkgInfoFifo);
+					// Data structures
 
+					// conn_table(tx_ibhconnTable_req,
+					// 		   s_axis_qp_conn_interface,
+					// 		   tx_connTable2ibh_rsp);
 
-	// Data structures
+					// state_table(rxIbh2stateTable_upd_req,
+					// 			txIbh2stateTable_upd_req,
+					// 			qpi2stateTable_upd_req,
+					// 			stateTable2rxIbh_rsp,
+					// 			stateTable2txIbh_rsp,
+					// 			stateTable2qpi_rsp);
 
-	conn_table(	tx_ibhconnTable_req,
-				s_axis_qp_conn_interface,
-				tx_connTable2ibh_rsp);
+					// msn_table(rxExh2msnTable_upd_req,
+					// 		  txExh2msnTable_req,
+					// 		  if2msnTable_init,
+					// 		  msnTable2rxExh_rsp,
+					// 		  msnTable2txExh_rsp);
 
-	state_table(rxIbh2stateTable_upd_req,
-				txIbh2stateTable_upd_req,
-				qpi2stateTable_upd_req,
-				stateTable2rxIbh_rsp,
-				stateTable2txIbh_rsp,
-				stateTable2qpi_rsp);
+// 					read_req_table(tx_readReqTable_upd,
+// #if !RETRANS_EN
+// 								   rx_readReqTable_upd_req);
+// #else
+// 				   rx_readReqTable_upd_req,
+// 				   rx_readReqTable_upd_rsp);
+// #endif
 
-	msn_table(	rxExh2msnTable_upd_req,
-				txExh2msnTable_req,
-				if2msnTable_init,
-				msnTable2rxExh_rsp,
-				msnTable2txExh_rsp);
-
-	read_req_table(	tx_readReqTable_upd,
-#if !RETRANS_EN
-					rx_readReqTable_upd_req);
-#else
-					rx_readReqTable_upd_req,
-					rx_readReqTable_upd_rsp);
-#endif
-
-	multi_queue<ap_uint<64>,MAX_QPS, 2048>(	tx_readReqAddr_push,
-											rx_readReqAddr_pop_req,
-											rx_readReqAddr_pop_rsp);
+					// multi_queue<ap_uint<64>, MAX_QPS, 2048>(tx_readReqAddr_push,
+					// 										rx_readReqAddr_pop_req,
+					// 										rx_readReqAddr_pop_rsp);
 
 #if RETRANS_EN
-	merge_retrans_request(tx2retrans_insertMeta, tx2retrans_insertAddrLen, tx2retrans_insertRequest);
+					merge_retrans_request(tx2retrans_insertMeta, tx2retrans_insertAddrLen, tx2retrans_insertRequest);
 
-	transport_timer(rxClearTimer_req,
-					txSetTimer_req,
-					timer2retrans_req);
+					transport_timer(rxClearTimer_req,
+									txSetTimer_req,
+									timer2retrans_req);
 
-	retransmitter(	rx2retrans_release_upd,
-					rx2retrans_req,
-					timer2retrans_req,
-					tx2retrans_insertRequest,
-					retransmitter2exh_eventFifo);
+					retransmitter(rx2retrans_release_upd,
+								  rx2retrans_req,
+								  timer2retrans_req,
+								  tx2retrans_insertRequest,
+								  retransmitter2exh_eventFifo);
 #endif
 }
 
-template void ib_transport_protocol<DATA_WIDTH>(	//RX
-							stream<ipUdpMeta>&	s_axis_rx_meta,
-							stream<net_axis<DATA_WIDTH> >&	s_axis_rx_data,
-							//stream<net_axis<DATA_WIDTH> >&	m_axis_rx_data,
-							//TX
-							stream<txMeta>&		s_axis_tx_meta,
-							stream<net_axis<DATA_WIDTH> >&	s_axis_tx_data,
-							stream<ipUdpMeta>&	m_axis_tx_meta,
-							stream<net_axis<DATA_WIDTH> >&	m_axis_tx_data,
-							//Memory
-							stream<routedMemCmd>&		m_axis_mem_write_cmd,
-							stream<routedMemCmd>&		m_axis_mem_read_cmd,
-							//stream<mmStatus>&	s_axis_mem_write_status,
+template void ib_transport_protocol<DATA_WIDTH>( // RX
+	stream<ipUdpMeta> &s_axis_rx_meta,
+	stream<net_axis<DATA_WIDTH> > &s_axis_rx_data,
+	// stream<net_axis<DATA_WIDTH> >&	m_axis_rx_data,
+	// TX
+	stream<txMeta> &s_axis_tx_meta,
+	stream<net_axis<DATA_WIDTH> > &s_axis_tx_data,
+	stream<ipUdpMeta> &m_axis_tx_meta,
+	stream<net_axis<DATA_WIDTH> > &m_axis_tx_data,
+	// Memory
+	stream<routedMemCmd> &m_axis_mem_write_cmd,
+	stream<routedMemCmd> &m_axis_mem_read_cmd,
+	// stream<mmStatus>&	s_axis_mem_write_status,
 
-							stream<routed_net_axis<DATA_WIDTH> >&	m_axis_mem_write_data,
-							stream<net_axis<DATA_WIDTH> >&	s_axis_mem_read_data,
+	stream<routed_net_axis<DATA_WIDTH> > &m_axis_mem_write_data,
+	stream<net_axis<DATA_WIDTH> > &s_axis_mem_read_data,
 
-							//Interface
-							stream<qpContext>& s_axis_qp_interface,
-							stream<ifConnReq>&	s_axis_qp_conn_interface,
+	// Interface
+	stream<qpContext> &s_axis_qp_interface,
+	stream<ifConnReq> &s_axis_qp_conn_interface,
 
-							//Pointer chasing
+// Pointer chasing
 #if POINTER_CHASING_EN
-							stream<ptrChaseMeta>&	m_axis_rx_pcmeta,
-							stream<ptrChaseMeta>&	s_axis_tx_pcmeta,
+	stream<ptrChaseMeta> &m_axis_rx_pcmeta,
+	stream<ptrChaseMeta> &s_axis_tx_pcmeta,
 #endif
 
-							ap_uint<32>&		regInvalidPsnDropCount
-							);
+	ap_uint<32> &regInvalidPsnDropCount,
+	stream<ap_uint<16> >& tx_ibhconnTable_req,
+	stream<connTableEntry> &tx_connTable2ibh_rsp,
+	stream<rxStateReq>& rxIbh2stateTable_upd_req,
+	stream<txStateReq>& txIbh2stateTable_upd_req,
+	stream<ifStateReq>& qpi2stateTable_upd_req,
+	stream<rxStateRsp>& stateTable2rxIbh_rsp,
+	stream<stateTableEntry> &stateTable2txIbh_rsp,
+	stream<stateTableEntry> &stateTable2qpi_rsp,
+	stream<rxMsnReq>&rxExh2msnTable_upd_req,
+	stream<ap_uint<16> > &txExh2msnTable_req,
+	stream<ifMsnReq>& if2msnTable_init,
+	stream<dmaState> &msnTable2rxExh_rsp,
+	stream<txMsnRsp>& msnTable2txExh_rsp,
+	stream<ap_uint<16> > &exh_lengthFifo,
+	stream<readRequest>& rx_readRequestFifo,
+	stream<event>& rx_readEvenFifo,
+	stream<ackEvent>& rx_ackEventFifo,
+	stream<txReadReqUpdate>& tx_readReqTable_upd,
+	stream<rxReadReqUpdate>& rx_readReqTable_upd_req,
+	stream<rxReadReqRsp>& rx_readReqTable_upd_rsp,
+	stream<mqInsertReq<ap_uint<64> > >& tx_readReqAddr_push,
+	stream<mqPopReq>& rx_readReqAddr_pop_req,
+	stream<ap_uint<64> >& rx_readReqAddr_pop_rsp
+	);

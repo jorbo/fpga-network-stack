@@ -519,13 +519,17 @@ void mq_process_requests(	//stream<retransRelease>&	rx2retrans_release_upd,
 		}//switch
 }
 
-template <class T, int NUM_QUEUES, int MULTI_QUEUE_SIZE>
-void multi_queue(	hls::stream<mqInsertReq<T> >&	multiQueue_push,
-					hls::stream<mqPopReq>&			multiQueue_pop_req,
-					hls::stream<T>&					multiQueue_pop_rsp)
+template <class T, int NUM_QUEUES, int MULTI_QUEUE_SIZE, int STREAM_COUNT>
+void multi_queue(	hls::stream<mqInsertReq<T> >	multiQueue_push[STREAM_COUNT],
+					hls::stream<mqPopReq>			multiQueue_pop_req[STREAM_COUNT],
+					hls::stream<T>				multiQueue_pop_rsp[STREAM_COUNT])
 {
 #pragma HLS DATAFLOW
 #pragma HLS INLINE
+
+for(int i = 0 ; i < STREAM_COUNT; i++){
+
+// #pragma HLS unroll
 
 	static hls::stream<mqPointerReq>		mq_pointerReqFifo("mq_pointerReqFifo");
 	static hls::stream<mqPointerUpdate>		mq_pointerUpdFifo("mq_pointerUpdFifo");
@@ -554,8 +558,8 @@ void multi_queue(	hls::stream<mqInsertReq<T> >&	multiQueue_push,
 	mq_meta_table<T,MULTI_QUEUE_SIZE>(mq_metaReqFifo,
 									mq_metaRspFifo);
 
-	mq_process_requests<T>(	multiQueue_pop_req,
-							multiQueue_push,
+	mq_process_requests<T>(	multiQueue_pop_req[i],
+							multiQueue_push[i],
 							mq_pointerReqFifo,
 							mq_pointerUpdFifo,
 							mq_pointerRspFifo,
@@ -563,6 +567,7 @@ void multi_queue(	hls::stream<mqInsertReq<T> >&	multiQueue_push,
 							mq_metaRspFifo,
 							mq_freeListFifo,
 							mq_releaseFifo,
-							multiQueue_pop_rsp);
+							multiQueue_pop_rsp[i]);
+	}
 
 }

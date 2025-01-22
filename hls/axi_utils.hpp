@@ -120,16 +120,23 @@ bool scan(std::istream& inputFile, net_axis<D>& word)
 	uint16_t lastTemp;
 	for (int i = 0; i < D/8; i++)
 	{
+		
 		if (inputFile >> std::hex >> temp)
 		{
+			std::cout << std::setfill('0') << std::setw(2) << temp;
 			word.data(i*8+7, i*8) = temp;
 		}
 		else
 		{
-			//std::cerr << "[ERROR]: could not scan input" << std::endl;
+			inputFile >> std::hex >> temp;
+			char buffer[1000];
+			inputFile.read(buffer, sizeof(buffer));
+			std::string str(buffer);
+			std::cerr << "[ERROR]: could not scan input " << str << " index" << i << std::endl;
 			return false;
-		}
+		}		
 	}
+	std::cout << std::endl;
 	inputFile >> keepTemp;
 	inputFile >> lastTemp;
 	word.keep = keepTemp;

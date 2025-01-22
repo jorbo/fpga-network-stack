@@ -34,7 +34,16 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "../packet.hpp"
 #include "../ipv6/ipv6.hpp"
 #include "../udp/udp.hpp"
-
+// #include "conn_table.hpp"
+#include "state_table.hpp"
+#include "msn_table.hpp"
+#include "transport_timer.hpp"
+#include "retransmitter/retransmitter.hpp"
+#include "read_req_table.hpp"
+#include "multi_queue/multi_queue.hpp"
+#include "conn_table_entry.hpp"
+#include "state_table_structs.hpp"
+#include "ib_types.hpp"
 using namespace hls;
 
 const uint32_t BTH_SIZE = 96;
@@ -42,40 +51,13 @@ const uint32_t RETH_SIZE = 128;
 const uint32_t AETH_SIZE = 32;
 const uint32_t IMMDT_SIZE = 32;
 const uint32_t RPCH_SIZE = 224;
+const uint32_t ATOMICTH_SIZE = 28;
+const uint32_t ATOMICACKH_SIZE = 8;
 
 const ap_uint<16> RDMA_DEFAULT_PORT = 0x12B7; //4791 --> 0x12B7
 
 #define RETRANS_EN 0
 
-// QP/EE states, page 473
-typedef enum {RESET, INIT, READY_RECV, READY_SEND, SQ_ERROR, ERROR} qpState;
-
-
-typedef enum {AETH, RETH} pkgType;
-typedef enum {SHIFT_AETH, SHIFT_RETH, SHIFT_NONE} pkgShiftType;
-typedef enum {MEM, FIFO} pkgSource;
-
-//See page 246
-typedef enum {
-	RC_RDMA_WRITE_FIRST = 0x06,
-	RC_RDMA_WRITE_MIDDLE = 0x07,
-	RC_RDMA_WRITE_LAST = 0x08,
-	RC_RDMA_WRITE_LAST_WITH_IMD = 0x09,
-	RC_RDMA_WRITE_ONLY = 0x0A,
-	RC_RDMA_WRITE_ONLY_WIT_IMD = 0x0B,
-	RC_RDMA_READ_REQUEST = 0x0C,
-	RC_RDMA_READ_RESP_FIRST = 0x0D,
-	RC_RDMA_READ_RESP_MIDDLE = 0x0E,
-	RC_RDMA_READ_RESP_LAST = 0x0F,
-	RC_RDMA_READ_RESP_ONLY = 0x10,
-	RC_ACK = 0x11,
-	RC_RDMA_PART_ONLY = 0x18,
-	RC_RDMA_PART_FIRST = 0x19,
-	RC_RDMA_PART_MIDDLE = 0x1A,
-	RC_RDMA_PART_LAST = 0x1B,
-	RC_RDMA_READ_POINTER_REQUEST = 0x1C,
-	RC_RDMA_READ_CONSISTENT_REQUEST = 0x1D,
-} ibOpCode;
 
 bool checkIfResponse(ibOpCode code);
 bool checkIfWriteOrPartReq(ibOpCode code);
@@ -116,7 +98,7 @@ struct qpContext
 	ap_uint<48> virtual_address;
 };
 
-struct ifConnReq
+struct 	ifConnReq
 {
 	ap_uint<16> qpn;
 	ap_uint<24> remote_qpn;
@@ -171,7 +153,7 @@ struct txPacketInfo
 	bool hasPayload;
 };
 
-typedef enum {APP_READ, APP_WRITE, APP_PART, APP_POINTER, APP_READ_CONSISTENT} appOpCode;
+typedef enum {APP_READ, APP_WRITE, APP_PART, APP_POINTER, APP_READ_CONSISTENT, APP_ATOMIC_ADD} appOpCode;
 //typedef enum {ORIGIN_FPGA, ORIGIN_HOST} reqOrigin;
 
 struct txMeta
@@ -472,6 +454,55 @@ public:
 
 };
 
+template <int W>
+class AtomicExHeader: public packetHeader<W, ATOMICTH_SIZE> {
+	using packetHeader<W, ATOMICTH_SIZE>::header;
+public:
+	AtomicExHeader() {}
+
+	void setVirtualAddress(ap_uint<64> addr) {
+		header(64, 0) = reverse(addr);
+	}
+	ap_uint<64> getVirtualAddress() {
+		return reverse((ap_uint<64>) header(63, 0));
+	}
+
+	void setRemoteKey(ap_uint<32> key) {
+		header(95, 64);
+	}
+
+	ap_uint<32> getRemoteKey() {
+		return reverse((ap_uint<32>) header(95,64));
+	}
+	void setSwapAddData(ap_uint<64> data) {
+		header(160, 96) = reverse(data);
+	}
+	ap_uint<64> getSwapAddData() {
+		return reverse((ap_uint<64>) header(160, 96));
+	}
+	void setCompareData(ap_uint<64> compare) {
+		header(224, 161) = reverse(compare);
+	}
+	ap_uint<64> getCompareData() {
+		return reverse((ap_uint<64>) header(224, 161));	
+	}
+};
+template <int W>
+class AtomicAckExHeader : public packetHeader<W, ATOMICACKH_SIZE> {
+	using packetHeader<W, ATOMICACKH_SIZE>::header;
+public:
+	AtomicAckExHeader() {}
+
+	void setOrigRemoteDt(ap_uint<64> data){
+		header(64, 0) = reverse(data);		
+	}
+
+	ap_uint<64> getOrigRemoteDt() {
+		return reverse((ap_uint<64>) header(64, 0));
+	}
+
+};
+
 /**
  * AETH, see page 254, page format on 337, NAK codes page 338
  * [7:0] syndrome, indicates if this is an ACK or NAK
@@ -630,6 +661,9 @@ public:
 	{
 		header = h.getRawHeader();
 	}
+	ExHeader(AtomicExHeader<W>& h){
+		header = h.getRawHeader();
+	}
 	/*ExHeader(RdmaPointerChaseHeader<W>& h)
 	{
 		header = h.getRawHeader();
@@ -647,6 +681,14 @@ public:
 		aethHeader.setRawHeader(header);
 		return aethHeader;
 	}
+
+	AtomicExHeader<W> getAtomicHeader() 
+	{
+		AtomicExHeader<W> atomicHeader;
+		atomicHeader.setRawHeader(header);
+		return atomicHeader;
+	}
+
 	/*RdmaPointerChaseHeader<W> getPointerChasingHeader()
 	{
 		RdmaPointerChaseHeader<W> pcHeader;
@@ -654,6 +696,7 @@ public:
 		return pcHeader;
 	}*/
 };
+
 
 struct ImmDt
 {
@@ -673,7 +716,7 @@ struct memCmdInternal
 	//ap_uint<1>	last;
 //#if POINTER_CHASING_EN
 	axiRoute route;
-//#endif
+//#endif@
 	memCmdInternal() {}
 	memCmdInternal(ap_uint<16> qpn, ap_uint<64> addr, ap_uint<32> len)
 #if !POINTER_CHASING_EN
@@ -710,4 +753,28 @@ void ib_transport_protocol(	//RX
 							hls::stream<ptrChaseMeta>&	s_axis_tx_pcmeta,
 #endif
 							//debug
-							ap_uint<32>&		regInvalidPsnDropCount);
+							ap_uint<32>&		regInvalidPsnDropCount,
+							hls::stream<ap_uint<16> >& tx_ibhconnTable_req,
+							hls::stream<connTableEntry>& tx_connTable2ibh_rsp,
+							hls::stream<rxStateReq>& rxIbh2stateTable_upd_req,
+							hls::stream<txStateReq>& txIbh2stateTable_upd_req,
+							hls::stream<ifStateReq>& qpi2stateTable_upd_req,
+							hls::stream<rxStateRsp>& stateTable2rxIbh_rsp,
+							hls::stream<stateTableEntry>& stateTable2txIbh_rsp,
+							hls::stream<stateTableEntry> &stateTable2qpi_rsp,
+							hls::stream<rxMsnReq>& rxExh2msnTable_upd_req,
+							hls::stream<ap_uint<16> >& txExh2msnTable_req,
+							hls::stream<ifMsnReq>& if2msnTable_init,
+							hls::stream<dmaState>& msnTable2rxExh_rsp,
+							hls::stream<txMsnRsp>& msnTable2txExh_rsp,
+							hls::stream<ap_uint<16> >& exh_lengthFifo,
+							hls::stream<readRequest>& rx_readRequestFifo,
+							hls::stream<event>& rx_readEvenFifo,
+							hls::stream<ackEvent>& rx_ackEventFifo,
+							hls::stream<txReadReqUpdate>& tx_readReqTable_upd,
+							hls::stream<rxReadReqUpdate>& rx_readReqTable_upd_req,
+							hls::stream<rxReadReqRsp>& rx_readReqTable_upd_rsp,
+							hls::stream<mqInsertReq<ap_uint<64> > >& tx_readReqAddr_push,
+							hls::stream<mqPopReq>& rx_readReqAddr_pop_req,
+							hls::stream<ap_uint<64> >& rx_readReqAddr_pop_rsp
+						);
