@@ -281,7 +281,6 @@ private:
 int test_rx(fakeDRAM* memory, std::ifstream& inputFile, std::ofstream& outputFile, ap_uint<128>& local_ip_address, ap_uint<128>& remote_ip_address)
 {
 #pragma HLS inline region off
-
 	stream<net_axis<128> >		s_axis_data128("testrx_s_axis_data128");
 	stream<net_axis<DATA_WIDTH> >		s_axis_rx_data("s_axis_rx_data");
 	//stream<ipUdpMeta>	m_axis_rx_meta("m_axis_rx_udp_meta");
@@ -291,11 +290,16 @@ int test_rx(fakeDRAM* memory, std::ifstream& inputFile, std::ofstream& outputFil
 	stream<net_axis<DATA_WIDTH> >		m_axis_tx_data("m_axis_tx_data");
 	stream<net_axis<128> >		m_axis_tx_data128("m_axis_tx_data128");
 	//memory
-	stream<routedMemCmd>		m_axis_mem_write_cmd("m_axis_mem_write_cmd");
-	stream<routedMemCmd>		m_axis_mem_read_cmd("m_axis_mem_read_cmd");
-	//stream<mmStatus>	s_axis_mem_write_status("s_axis_mem_write_status");
-	stream<routed_net_axis<DATA_WIDTH> >		m_axis_mem_write_data("m_axis_mem_write_data");
-	stream<net_axis<DATA_WIDTH> >		s_axis_mem_read_data("s_axis_mem_read_data");
+	stream<routedMemCmd> m_axis_mem_write_cmd[PE_COUNT];
+	stream<routedMemCmd> m_axis_mem_read_cmd[PE_COUNT];
+	stream<routed_net_axis<DATA_WIDTH>> m_axis_mem_write_data[PE_COUNT];
+	stream<net_axis<DATA_WIDTH>> s_axis_mem_read_data[PE_COUNT];
+
+	// stream<routedMemCmd>		m_axis_mem_write_cmd("m_axis_mem_write_cmd");
+	// stream<routedMemCmd>		m_axis_mem_read_cmd("m_axis_mem_read_cmd");
+	// //stream<mmStatus>	s_axis_mem_write_status("s_axis_mem_write_status");
+	// stream<routed_net_axis<DATA_WIDTH> >		m_axis_mem_write_data("m_axis_mem_write_data");
+	// stream<net_axis<DATA_WIDTH> >		s_axis_mem_read_data("s_axis_mem_read_data");
 	//interface
 	stream<qpContext>	s_axis_qp_interface("s_axis_qp_interface");
 	stream<ifConnReq>	s_axis_qp_conn_interface("s_axis_qp_conn_interface");
@@ -365,6 +369,7 @@ int test_rx(fakeDRAM* memory, std::ifstream& inputFile, std::ofstream& outputFil
 		count++;
 	}
 	//start packet processing
+	count = 0;
 	while (scan(inputFile, inWord))
 	{
 		s_axis_data128.write(inWord);
@@ -372,7 +377,8 @@ int test_rx(fakeDRAM* memory, std::ifstream& inputFile, std::ofstream& outputFil
 		if (inWord.last)
 			std::cout << "inWOrd last" << std::endl;
 
-		rocev2<DATA_WIDTH>(	s_axis_rx_data,
+		rocev2<DATA_WIDTH>(	
+				s_axis_rx_data,
 				//m_axis_rx_data,
 				s_axis_tx_meta,
 				s_axis_tx_data,
@@ -392,7 +398,7 @@ int test_rx(fakeDRAM* memory, std::ifstream& inputFile, std::ofstream& outputFil
 				regCrcDropPkgCount,
 				regInvalidPsnDropCount);
 	}
-	while (count < 8000)
+	while (count < 9000)
 	{
 		convertStreamWidth<128, 25>(s_axis_data128, s_axis_rx_data);
 		convertStreamWidth<DATA_WIDTH, 26>(m_axis_tx_data, m_axis_tx_data128);
@@ -415,10 +421,11 @@ int test_rx(fakeDRAM* memory, std::ifstream& inputFile, std::ofstream& outputFil
 				local_ip_address,
 				regCrcDropPkgCount,
 				regInvalidPsnDropCount);
-
-		memory->process_writes<DATA_WIDTH>(m_axis_mem_write_cmd, m_axis_mem_write_data);
-		memory->process_reads<DATA_WIDTH>(m_axis_mem_read_cmd, s_axis_mem_read_data);
-		count++;
+		for(int i = 0; i < PE_COUNT; i++){
+			memory->process_writes<DATA_WIDTH>(m_axis_mem_write_cmd[i], m_axis_mem_write_data[i]);
+			memory->process_reads<DATA_WIDTH>(m_axis_mem_read_cmd[i], s_axis_mem_read_data[i]);
+			count++;
+		}
 	}
 
 	net_axis<128> outWord;
@@ -451,11 +458,15 @@ int test_tx_debug(std::ifstream& inputFile, std::ofstream& outputFile, ap_uint<1
 	stream<net_axis<128> >		m_axis_tx_data128("m_axis_tx_data128");
 	stream<net_axis<256> >		m_axis_tx_data256("m_axis_tx_data256");
 	//memory
-	stream<routedMemCmd>		m_axis_mem_write_cmd("m_axis_mem_write_cmd");
-	stream<routedMemCmd>		m_axis_mem_read_cmd("m_axis_mem_read_cmd");
+	stream<routedMemCmd>		m_axis_mem_write_cmd[PE_COUNT];
+	stream<routedMemCmd>		m_axis_mem_read_cmd[PE_COUNT];
 	//stream<mmStatus>	s_axis_mem_write_status("s_axis_mem_write_status");
-	stream<routed_net_axis<DATA_WIDTH> >		m_axis_mem_write_data("m_axis_mem_write_data");
-	stream<net_axis<DATA_WIDTH> >		s_axis_mem_read_data("s_axis_mem_read_data");
+	stream<routed_net_axis<DATA_WIDTH> >		m_axis_mem_write_data[PE_COUNT];
+	stream<net_axis<DATA_WIDTH> >		s_axis_mem_read_data[PE_COUNT];
+	#pragma HLS ARRAY_PARTITION variable = m_axis_mem_write_cmd dim = 1 complete
+	#pragma HLS ARRAY_PARTITION variable = m_axis_mem_read_cmd dim = 1 complete
+	#pragma HLS ARRAY_PARTITION variable = m_axis_mem_write_data dim = 1 complete
+	#pragma HLS ARRAY_PARTITION variable = s_axis_mem_read_data dim = 1 complete
 	//interface
 	stream<qpContext>	s_axis_qp_interface("s_axis_qp_interface");
 	stream<ifConnReq>	s_axis_qp_conn_interface("s_axis_qp_conn_interface");
@@ -538,6 +549,7 @@ int test_tx_debug(std::ifstream& inputFile, std::ofstream& outputFile, ap_uint<1
 	}
 
 	s_axis_tx_meta.write(txMeta(APP_WRITE, 0x11, (uint64_t)dataPtr, 0x7fc292600000, pkgLen));
+	// s_axis_tx_meta.write(txMeta(APP_ATOMIC_ADD, 0x11,(uint64_t)dataPtr, 0x7fc292600000, pkgLen ));
 
 	//process write packet
 	int pkgCount = 0;
@@ -609,25 +621,27 @@ int test_tx_debug(std::ifstream& inputFile, std::ofstream& outputFile, ap_uint<1
 				regInvalidPsnDropCount);
 
 		//handle writes
-		if (!m_axis_mem_write_cmd.empty() && !writeCmdReady)
-		{
-			m_axis_mem_write_cmd.read(writeCmd);
-			writeCmdReady = true;
-		}
-		if (writeCmdReady && m_axis_mem_write_data.size() >= (writeCmd.data.len/8))
-		{
-			memory.processWrite(writeCmd, m_axis_mem_write_data);
-			writeCmdReady = false;
-		}
-		//handle reads
-		if (!m_axis_mem_read_cmd.empty())
-		{
-			std::cout << "read cmd: counter" << readCmdCounter << std::endl;
-			m_axis_mem_read_cmd.read(readCmd);
-			memory.processRead(readCmd, s_axis_mem_read_data);
-			readCmdCounter++;
-		}
-		count++;
+		for(int i = 0; i < PE_COUNT; i++){
+			if (!m_axis_mem_write_cmd[i].empty() && !writeCmdReady)
+			{
+				m_axis_mem_write_cmd[i].read(writeCmd);
+				writeCmdReady = true;
+			}
+			if (writeCmdReady && m_axis_mem_write_data[i].size() >= (writeCmd.data.len/8))
+			{
+				memory.processWrite(writeCmd, m_axis_mem_write_data[i]);
+				writeCmdReady = false;
+			}
+			//handle reads
+			if (!m_axis_mem_read_cmd[i].empty())
+			{
+				std::cout << "read cmd: counter" << readCmdCounter << std::endl;
+				m_axis_mem_read_cmd[i].read(readCmd);
+				memory.processRead(readCmd, s_axis_mem_read_data[i]);
+				readCmdCounter++;
+			}
+			count++;
+		}		
 	}
 
 	net_axis<128> outWord;
@@ -659,11 +673,11 @@ int test_tx_debug_1(std::ifstream& inputFile, std::ofstream& outputFile, ap_uint
 	stream<net_axis<128> >		m_axis_tx_data128("m_axis_tx_data128");
 	stream<net_axis<256> >		m_axis_tx_data256("m_axis_tx_data256");
 	//memory
-	stream<routedMemCmd>		m_axis_mem_write_cmd("m_axis_mem_write_cmd");
-	stream<routedMemCmd>		m_axis_mem_read_cmd("m_axis_mem_read_cmd");
+	stream<routedMemCmd>		m_axis_mem_write_cmd[PE_COUNT];
+	stream<routedMemCmd>		m_axis_mem_read_cmd[PE_COUNT];
 	//stream<mmStatus>	s_axis_mem_write_status("s_axis_mem_write_status");
-	stream<routed_net_axis<DATA_WIDTH> >		m_axis_mem_write_data("m_axis_mem_write_data");
-	stream<net_axis<DATA_WIDTH> >		s_axis_mem_read_data("s_axis_mem_read_data");
+	stream<routed_net_axis<DATA_WIDTH> >		m_axis_mem_write_data[PE_COUNT];
+	stream<net_axis<DATA_WIDTH> >		s_axis_mem_read_data[PE_COUNT];
 	//interface
 	stream<qpContext>	s_axis_qp_interface("s_axis_qp_interface");
 	stream<ifConnReq>	s_axis_qp_conn_interface("s_axis_qp_conn_interface");
@@ -809,25 +823,28 @@ int test_tx_debug_1(std::ifstream& inputFile, std::ofstream& outputFile, ap_uint
 				regInvalidPsnDropCount);
 
 		//handle writes
-		if (!m_axis_mem_write_cmd.empty() && !writeCmdReady)
-		{
-			m_axis_mem_write_cmd.read(writeCmd);
-			writeCmdReady = true;
+		for(int i = 0; i < PE_COUNT; i++){
+			if (!m_axis_mem_write_cmd[i].empty() && !writeCmdReady)
+			{
+				m_axis_mem_write_cmd[i].read(writeCmd);
+				writeCmdReady = true;
+			}
+			if (writeCmdReady && m_axis_mem_write_data[i].size() >= (writeCmd.data.len/8))
+			{
+				memory.processWrite(writeCmd, m_axis_mem_write_data[i]);
+				writeCmdReady = false;
+			}
+			//handle reads
+			if (!m_axis_mem_read_cmd[i].empty())
+			{
+				std::cout << "read cmd: counter" << readCmdCounter << std::endl;
+				m_axis_mem_read_cmd[i].read(readCmd);
+				memory.processRead(readCmd, s_axis_mem_read_data[i]);
+				readCmdCounter++;
+			}
+			count++;
 		}
-		if (writeCmdReady && m_axis_mem_write_data.size() >= (writeCmd.data.len/8))
-		{
-			memory.processWrite(writeCmd, m_axis_mem_write_data);
-			writeCmdReady = false;
-		}
-		//handle reads
-		if (!m_axis_mem_read_cmd.empty())
-		{
-			std::cout << "read cmd: counter" << readCmdCounter << std::endl;
-			m_axis_mem_read_cmd.read(readCmd);
-			memory.processRead(readCmd, s_axis_mem_read_data);
-			readCmdCounter++;
-		}
-		count++;
+		
 	}
 
 	net_axis<128> outWord;

@@ -56,3 +56,7 @@ bool checkIfRethHeader(ibOpCode code)
 			code == RC_RDMA_PART_ONLY || code == RC_RDMA_PART_FIRST ||
 			code == RC_RDMA_READ_REQUEST || code == RC_RDMA_READ_CONSISTENT_REQUEST);
 }
+
+bool checkifAtomicHeader(ibOpCode code){
+	return code == RC_RDMA_ATOMIC_REQUEST;
+}

@@ -27,18 +27,42 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ************************************************/
 #pragma once
-
-#include "../axi_utils.hpp"
-#include "../ib_transport_protocol/ib_transport_protocol.hpp"
-
-struct connTableEntry
-{
-	//ap_uint<24> local_qpn;
-	ap_uint<24> remote_qpn;
-	ap_uint<128> remote_ip_address; //TODO make variable
-	ap_uint<16> remote_udp_port; //TODO what is this used for
-};
-
-void conn_table(	hls::stream<ap_uint<16> >&	tx_ibhconnTable_req,
+#include "ib_transport_protocol.hpp"
+#include "conn_table_entry.hpp"
+#include <rocev2_config.hpp> //defines MAX_QPS
+template<int SIZE>
+void conn_table(	hls::stream<ap_uint<16> >	tx_ibhconnTable_req[SIZE],
 						hls::stream<ifConnReq>&		qpi2connTable_req,
-						hls::stream<connTableEntry>&	tx_connTable2ibh_rsp);
+						hls::stream<connTableEntry>	tx_connTable2ibh_rsp[SIZE])
+{
+#pragma HLS ARRAY_PARTITION variable=tx_ibhconnTable_req dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=tx_connTable2ibh_rsp dim=1 complete  
+#pragma HLS STREAM depth = 2 variable = tx_connTable2ibh_rsp
+
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+
+	for(int i = 0; i < SIZE; i++){
+		#pragma HLS unroll
+		static connTableEntry conn_table[MAX_QPS];
+		//#pragma HLS RESOURCE variable=conn_table core=RAM_2P_BRAM
+
+		ap_uint<16> txRequest;
+		ifConnReq ifRequest;
+
+		if (!tx_ibhconnTable_req[i].empty())
+		{
+			tx_ibhconnTable_req[i].read(txRequest);
+			//std::cout << "Requested conn data for: " << txRequest << std::endl;
+			tx_connTable2ibh_rsp[i].write(conn_table[txRequest]);
+		}
+		else if (!qpi2connTable_req.empty())
+		{
+			qpi2connTable_req.read(ifRequest);
+			//std::cout << "Storing conn data for: " << ifRequest.qpn << std::endl;
+			conn_table[ifRequest.qpn].remote_qpn = ifRequest.remote_qpn;
+			conn_table[ifRequest.qpn].remote_ip_address = ifRequest.remote_ip_address;
+			conn_table[ifRequest.qpn].remote_udp_port = ifRequest.remote_udp_port;
+		}
+	}
+}

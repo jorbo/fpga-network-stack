@@ -30,6 +30,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "../../axi_utils.hpp"
 #include "../ib_transport_protocol.hpp"
+#include "../ib_types.hpp"
 using namespace hls;
 
 const uint32_t META_TABLE_SIZE = 2000;

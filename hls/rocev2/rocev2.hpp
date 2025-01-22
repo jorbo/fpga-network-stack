@@ -33,9 +33,18 @@
 #include "../ipv6/ipv6.hpp"
 #include "../udp/udp.hpp"
 #include "../ib_transport_protocol/ib_transport_protocol.hpp"
+#include "../ib_transport_protocol/conn_table.hpp"
+#include "../ib_transport_protocol/state_table.hpp"
+#include "../ib_transport_protocol/msn_table.hpp"
+#include "../ib_transport_protocol/transport_timer.hpp"
+#include "../ib_transport_protocol/retransmitter/retransmitter.hpp"
+#include "../ib_transport_protocol/read_req_table.hpp"
+#include "../ib_transport_protocol/multi_queue/multi_queue.hpp"
 //#include "../pointer_chasing/pointer_chasing.hpp"
 
 #define DISABLE_CRC_CHECK
+
+#define PE_COUNT 2
 
 #if IP_VERSION == 6
 typedef ipv6Meta ipMeta;
@@ -44,15 +53,16 @@ typedef ipv4Meta ipMeta;
 #endif
 
 template <int WIDTH>
-void rocev2(hls::stream<net_axis<WIDTH> >&	s_axis_rx_data,
+void rocev2(
+				hls::stream<net_axis<WIDTH> >&	s_axis_rx_data,
 				hls::stream<txMeta>&	s_axis_tx_meta,
 				hls::stream<net_axis<WIDTH> >&	s_axis_tx_data,
 				hls::stream<net_axis<WIDTH> >&	m_axis_tx_data,
 				//Memory
-				hls::stream<routedMemCmd>&		m_axis_mem_write_cmd,
-				hls::stream<routedMemCmd>&		m_axis_mem_read_cmd,
-				hls::stream<routed_net_axis<WIDTH> >&	m_axis_mem_write_data,
-				hls::stream<net_axis<WIDTH> >&	s_axis_mem_read_data,
+				hls::stream<routedMemCmd> m_axis_mem_write_cmd[PE_COUNT],
+				hls::stream<routedMemCmd> m_axis_mem_read_cmd[PE_COUNT],
+				hls::stream<routed_net_axis<WIDTH> > m_axis_mem_write_data[PE_COUNT],
+				hls::stream<net_axis<WIDTH> > s_axis_mem_read_data[PE_COUNT],
 				//Interface
 				hls::stream<qpContext>&	s_axis_qp_interface,
 				hls::stream<ifConnReq>&	s_axis_qp_conn_interface,
@@ -62,9 +72,13 @@ void rocev2(hls::stream<net_axis<WIDTH> >&	s_axis_rx_data,
 				hls::stream<ptrChaseMeta>&	s_axis_tx_pcmeta,
 #endif
 
-				ap_uint<128>		reg_ip_address,
+				ap_uint<128>		local_ip_address,
 
 				//Debug output
 				ap_uint<32>& regCrcDropPkgCount,
 				ap_uint<32>& 	 regInvalidPsnDropCount);
 
+void qp_interface(stream<qpContext> &contextIn,
+				  stream<stateTableEntry> &stateTable2qpi_rsp,
+				  stream<ifStateReq> &qpi2stateTable_upd_req,
+				  stream<ifMsnReq> &if2msnTable_init);

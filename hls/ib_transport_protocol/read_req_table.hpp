@@ -29,6 +29,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #pragma once
 
 #include "../axi_utils.hpp"
+#include <rocev2_config.hpp> //defines MAX_QPS
 using namespace hls;
 
 struct txReadReqUpdate
@@ -68,10 +69,54 @@ struct readReqTableEntry
 	ap_uint<24> max_fwd_readreq;
 };
 
-void read_req_table(stream<txReadReqUpdate>&	tx_readReqTable_upd,
+
+template <int SIZE>
+void read_req_table(stream<txReadReqUpdate> tx_readReqTable_upd[SIZE],
 #if !RETRANS_EN
-					stream<rxReadReqUpdate>&	rx_readReqTable_upd_req);
+					stream<rxReadReqUpdate> rx_readReqTable_upd_req[SIZE])
 #else
-					stream<rxReadReqUpdate>&	rx_readReqTable_upd_req,
-					stream<rxReadReqRsp>&		rx_readReqTable_upd_rsp);
+					stream<rxReadReqUpdate> rx_readReqTable_upd_req[SIZE],
+					stream<rxReadReqRsp> rx_readReqTable_upd_rsp[SIZE])
 #endif
+{
+#pragma HLS ARRAY_PARTITION variable=tx_readReqTable_upd dim=1 complete      
+#if !RETRANS_EN
+#pragma HLS ARRAY_PARTITION variable=rx_readReqTable_upd_req dim=1 complete  
+#else
+#pragma HLS ARRAY_PARTITION variable=rx_readReqTable_upd_req dim=1 complete  
+#pragma HLS ARRAY_PARTITION variable=rx_readReqTable_upd_rsp dim=1 complete  
+#endif
+
+#pragma HLS PIPELINE II = 1
+#pragma HLS INLINE off
+
+	static readReqTableEntry req_table[MAX_QPS];
+#pragma HLS RESOURCE variable = req_table core = RAM_2P_BRAM
+	for (int i = 0; i < SIZE; i++)
+	{
+#pragma HLS unroll
+		txReadReqUpdate update;
+		rxReadReqUpdate request;
+
+		if (!tx_readReqTable_upd[i].empty())
+		{
+			tx_readReqTable_upd[i].read(update);
+			req_table[update.qpn].max_fwd_readreq = update.max_fwd_readreq;
+		}
+		else if (!rx_readReqTable_upd_req[i].empty())
+		{
+			rx_readReqTable_upd_req[i].read(request);
+			if (request.write)
+			{
+				req_table[request.qpn].oldest_outstanding_readreq = request.oldest_outstanding_readreq;
+			}
+#if RETRANS_EN
+			else
+			{
+				bool valid = (req_table[request.qpn].oldest_outstanding_readreq < req_table[request.qpn].max_fwd_readreq);
+				rx_readReqTable_upd_rsp[i].write(rxReadReqRsp(req_table[request.qpn].oldest_outstanding_readreq, valid));
+			}
+#endif
+		}
+	}
+}

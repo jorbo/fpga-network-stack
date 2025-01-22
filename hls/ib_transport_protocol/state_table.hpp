@@ -29,84 +29,103 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #pragma once
 
 #include "../axi_utils.hpp"
-#include "../ib_transport_protocol/ib_transport_protocol.hpp"
-
-//PSN, page 293, 307, 345
-struct stateTableEntry
+#include "state_table_structs.hpp"
+#include <rocev2_config.hpp> //defines MAX_QPS
+#include "ib_types.hpp"
+template <int SIZE>
+void state_table(hls::stream<rxStateReq> rxIbh2stateTable_upd_req[SIZE],
+				 hls::stream<txStateReq> txIbh2stateTable_upd_req[SIZE],
+				 hls::stream<ifStateReq> qpi2stateTable_upd_req[SIZE],
+				 hls::stream<rxStateRsp> stateTable2rxIbh_rsp[SIZE],
+				 hls::stream<stateTableEntry> stateTable2txIbh_rsp[SIZE],
+				 hls::stream<stateTableEntry> stateTable2qpi_rsp[SIZE])
 {
-	//window
-	ap_uint<24> resp_epsn;
-	ap_uint<24> resp_old_outstanding;
+#pragma HLS ARRAY_PARTITION variable=rxIbh2stateTable_upd_req dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=txIbh2stateTable_upd_req dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=qpi2stateTable_upd_req dim=1 complete   
+#pragma HLS ARRAY_PARTITION variable=stateTable2rxIbh_rsp dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=stateTable2txIbh_rsp dim=1 complete    
+#pragma HLS ARRAY_PARTITION variable=stateTable2qpi_rsp dim=1 complete   
 
-	ap_uint<24> req_next_psn;
-	ap_uint<24> req_old_unack;
-	ap_uint<24> req_old_valid; //required? can be computed?
-	ap_uint<3>	retryCounter;
-};
-
-struct ifStateReq
-{
-	ap_uint<16> qpn;
-	qpState		newState;
-	ap_uint<24> remote_psn;
-	ap_uint<24> local_psn;
-	bool		write;
-	ifStateReq() {}
-	ifStateReq(ap_uint<24> qpn)
-		:qpn(qpn), write(false) {}
-	ifStateReq(ap_uint<16> qpn, qpState s, ap_uint<24> rpsn, ap_uint<24> lpsn)
-		:qpn(qpn), newState(s), remote_psn(rpsn), local_psn(lpsn), write(true) {}
-};
-
-struct rxStateReq
-{
-	ap_uint<16> qpn;
-	ap_uint<24> epsn;
-	ap_uint<3>	retryCounter;
-	bool		isResponse;
-	bool		write;
-	rxStateReq() :isResponse(false), write(false) {}
-	rxStateReq(ap_uint<24> qpn, bool isRsp)
-		:qpn(qpn), isResponse(isRsp), write(false) {}
-	rxStateReq(ap_uint<16> qpn, ap_uint<24> psn, bool isRsp)
-		:qpn(qpn), epsn(psn), isResponse(isRsp), retryCounter(0x7), write(true) {}
-	rxStateReq(ap_uint<16> qpn, ap_uint<24> psn, ap_uint<3> rc, bool isRsp)
-		:qpn(qpn), epsn(psn), isResponse(isRsp), retryCounter(rc), write(true) {}
-};
+#pragma HLS PIPELINE II = 1
+#pragma HLS INLINE off
 
 
-struct rxStateRsp
-{
-	//window
-	ap_uint<24> epsn;
-	ap_uint<24> oldest_outstanding_psn;
-	ap_uint<24> max_forward; //used for reponses, page 346
+	static stateTableEntry state_table[MAX_QPS];
+#pragma HLS RESOURCE variable = state_table core = RAM_2P_BRAM
 
-	ap_uint<3>	retryCounter;
-	rxStateRsp() {}
-	rxStateRsp(ap_uint<24> epsn, ap_uint<24> old)
-		:epsn(epsn), oldest_outstanding_psn(old), max_forward(0), retryCounter(0) {}
-	rxStateRsp(ap_uint<24> epsn, ap_uint<24> old, ap_uint<24> maxf)
-		:epsn(epsn), oldest_outstanding_psn(old), max_forward(maxf), retryCounter(0) {}
-	rxStateRsp(ap_uint<24> epsn, ap_uint<24> old, ap_uint<24> maxf, ap_uint<3> rc)
-		:epsn(epsn), oldest_outstanding_psn(old), max_forward(maxf), retryCounter(rc) {}
-};
+	for (int i = 0; i < SIZE; i++)
+	{
+		#pragma HLS unroll
 
-struct txStateReq
-{
-	ap_uint<16> qpn;
-	ap_uint<24> psn;
-	bool		write;
-	txStateReq() :write(false) {}
-	txStateReq(ap_uint<24> qpn)
-		:qpn(qpn), write(false) {}
-	txStateReq(ap_uint<16> qpn, ap_uint<24> psn)
-		:qpn(qpn), psn(psn), write(true) {}
-};
+		rxStateReq rxRequest;
+		txStateReq txRequest;
+		ifStateReq ifRequest;
 
-void state_table(	hls::stream<rxStateReq>& rxIbh2stateTable_upd_req,
-						hls::stream<txStateReq>& txIbh2stateTable_upd_req,
-						hls::stream<ifStateReq>& qpi2stateTable_upd_req,
-						hls::stream<rxStateRsp>& stateTable2rxIbh_rsp,
-						hls::stream<stateTableEntry>& stateTable2txIbh_rsp,
-						hls::stream<stateTableEntry>& stateTable2qpi_rsp);
+		if (!rxIbh2stateTable_upd_req[i].empty())
+		{
+			rxIbh2stateTable_upd_req[i].read(rxRequest);
+			if (rxRequest.write)
+			{
+				if (rxRequest.isResponse)
+				{
+					state_table[rxRequest.qpn].req_old_unack = rxRequest.epsn;
+				}
+				else
+				{
+					state_table[rxRequest.qpn].resp_epsn = rxRequest.epsn;
+					state_table[rxRequest.qpn].retryCounter = rxRequest.retryCounter;
+					// state_table[rxRequest.qpn].sendNAK = rxRequest.epsn;
+				}
+			}
+			else
+			{
+				stateTableEntry entry = state_table[rxRequest.qpn(15, 0)];
+				if (rxRequest.isResponse)
+				{
+					stateTable2rxIbh_rsp[i].write(rxStateRsp(entry.req_old_unack, entry.req_old_valid, entry.req_next_psn - 1));
+				}
+				else
+				{
+					stateTable2rxIbh_rsp[i].write(rxStateRsp(entry.resp_epsn, entry.resp_old_outstanding, entry.resp_epsn, entry.retryCounter));
+				}
+			}
+		}
+		else if (!txIbh2stateTable_upd_req[i].empty())
+		{
+			txIbh2stateTable_upd_req[i].read(txRequest);
+			if (txRequest.write)
+			{
+				state_table[txRequest.qpn].req_next_psn = txRequest.psn;
+			}
+			else
+			{
+				stateTable2txIbh_rsp[i].write(state_table[txRequest.qpn]);
+			}
+		}
+		else if (!qpi2stateTable_upd_req[i].empty())
+		{
+			qpi2stateTable_upd_req[i].read(ifRequest);
+			if (ifRequest.write)
+			{
+				std::cout << "SETUP new connection, PSN: " << ifRequest.remote_psn << std::endl;
+				// state_table[ifRequest.qpn].state = ifRequest.newState;
+				// state_table[ifRequest.qpn].prevOpCode = RC_RDMA_WRITE_LAST;
+				state_table[ifRequest.qpn].resp_epsn = ifRequest.local_psn;
+				state_table[ifRequest.qpn].resp_old_outstanding = ifRequest.local_psn;
+				state_table[ifRequest.qpn].req_next_psn = ifRequest.remote_psn;
+				state_table[ifRequest.qpn].req_old_unack = ifRequest.remote_psn;
+				state_table[ifRequest.qpn].req_old_valid = ifRequest.remote_psn;
+				state_table[ifRequest.qpn].retryCounter = 0xF;
+				// state_table[ifRequest.qpn].sendNAK = false;
+
+				// state_table[ifRequest.qpn].r_key = ifRequest.r_key;
+				// state_table[ifRequest.qpn].virtual_address = ifRequest.virtual_address;
+			}
+			else
+			{
+				stateTable2qpi_rsp[i].write(state_table[ifRequest.qpn(15, 0)]);
+			}
+		}
+	}
+}
